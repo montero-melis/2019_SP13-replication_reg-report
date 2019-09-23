@@ -1,0 +1,290 @@
+---
+title: 'Appendix E: Analysis pipeline'
+author: '[Guillermo Montero-Melis](https://www.mpi.nl/people/montero-melis-guillermo)'
+date: '`r as.character(format(Sys.Date(), format="%d/%m/%Y"))`'
+output:
+  html_document:
+    depth: 2
+    number_sections: yes
+    theme: default
+    toc: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Introduction
+============
+
+This knitr document 
+
+1. Generates random data with the same shape as the
+data we will collect in our replication (for details of how the data is
+generated, see the custom function defined in `generate_data_fnc.R`). The data
+is generated with a fixed random seed for reproducibility.
+2. Analyzes this data in the same way we will analyze our actual data.
+
+
+Set up workspace
+===============
+
+```{r, message=FALSE}
+library("knitr")
+library("brms")
+library("tidyverse")
+```
+
+
+```{r}
+# Load brms model fitted to original data
+fm <- readRDS("data/bayes_glmm_normprior_interact.rds")
+```
+
+
+```{r}
+# Load simulate_binom() function
+source("generate_data_fnc.R")
+```
+
+
+Generate data
+============
+
+Set simulation parameters
+------------------------
+
+The arguments we need to pass to `simulate_binom()` specify different parameters
+of the statistical model that generates the data.
+We take those parameters from the original data whenever we can and we make up
+the rest using common sense.
+
+
+```{r}
+# Fixed effects
+# Vector of coefficient means
+fixef_means <- fixef(fm)[, 1]
+# # Substitute a 0 effect (or any other value) for the critical interaction:
+# fixef_means[4] <- 0
+fixef_means
+```
+
+
+```{r}
+# Covariance matrix (Sigma); we need to square the SEs to convert them to Variances
+fixef_sigma <- diag(fixef(fm)[, 2]) ^ 2  # we assume uncorrelated diagonal matrix
+fixef_sigma
+```
+
+
+```{r}
+# For random effects by subject we only have an estimate of the random intercept:
+VarCorr(fm)
+# We will assume that SDs for the other coefficients are proportional to the
+# corresponding fixef SEM in the same way the intercept is:
+prop <- VarCorr(fm)$subject$sd[1] / fixef(fm)[1, 2]  # random variability >3 times SEM
+ranef_sigma_subj <- diag(fixef(fm)[, 2] * prop) ^ 2  # again assume uncorrelated diagonal matrix
+ranef_sigma_subj
+```
+
+
+```{r}
+# Random effects by item we need to completely make up. We let SD for the intercept
+# and Movement conditions just be the same as the corresponding by-subject SDs:
+ranef_sigma_item <- diag(fixef(fm)[1:2, 2] * prop) ^ 2  # assume uncorrelated diagonal matrix
+ranef_sigma_item
+```
+
+
+Simulate data
+-------------
+
+Simulate data for our maximum $N=96$:
+
+```{r}
+# Simulate data
+set.seed(654198461)  # make data set replicable
+d_list <- simulate_binom(
+  Nsubj = 96,
+  Nitem = 104,
+  fixef_means = fixef_means,
+  fixef_sigma = fixef_sigma,
+  ranef_sigma_subj = ranef_sigma_subj,
+  ranef_sigma_item = ranef_sigma_item,
+  full_output = TRUE,
+  print_each_step = FALSE
+)
+```
+
+
+The output consists of a list of data frames that contain the data as well as
+information about the parameters that generated the data.
+
+```{r}
+names(d_list)
+```
+
+
+For example, the 2nd element in the list is a data frame with the population-level
+fixed effects for the simulation:
+
+```{r}
+# mean fixed effects
+d_list[[2]]
+```
+
+
+
+The 1st element in the list contains a data frame of the simulated data:
+
+```{r}
+# First list contains the actual data set
+d <- d_list[[1]]
+head(d) %>% kable
+```
+
+
+This data frame contains columns that decompose each observation into the
+parameters that generated it. These parameters come from three different levels: 
+population-, subject-, and participant-level.
+
+In the actual data set we would only observe the actual outcome and would have
+to infer the rest. It would look like this:
+
+```{r}
+d %>% select(subject : Error) %>% head %>% kable
+```
+
+
+Simulate sequential data collection
+-----------------------------------
+
+Our design is sequential:
+
+1. Collect data from $minN=60$ participants.
+2. Compute $BF$ for alternative hypothesis (interaction $\neq 0$) vs null hypothesis (interaction $= 0$)
+3. If either $BF_{10} > 6$ or $BF_{01} > 6$, stop data collection and report results. Else:
+4. If $N<96$, collect another batch of 12 participants and go to step 2. Else:
+5. When we reach $N=96$, stop data collection, compute $BF$ and report results.
+
+
+We therefore split the data into batches:
+
+```{r}
+d_60 <- d %>% filter(subject %in% 1 : 60)
+d_72 <- d %>% filter(subject %in% 1 : 72)
+d_84 <- d %>% filter(subject %in% 1 : 84)
+d_96 <- d %>% filter(subject %in% 1 : 96)
+```
+
+
+Plot and analyze data
+=====================
+
+We create a function that streamlines data processing, model fitting, and 
+computation of Bayes factors:
+
+
+```{r}
+analyse_pipe <- function(df) {  # it expects the data frame in above format
+  
+  # Drop superfluous columns
+  df <- select(df, subject : Error)
+  
+  # coding scheme: contrast code factors and standardize numerical predictors
+  contrasts(df$movement) <- contr.sum(2)
+  colnames(contrasts(df$movement)) <- "arms_vs_legs"
+  print(contrasts(df$movement))
+  contrasts(df$word_type) <- contr.sum(2)
+  colnames(contrasts(df$word_type)) <- "arms_vs_legs"
+  print(contrasts(df$word_type))
+  df$trial_in_exp_z <- scale(df$trial_in_exp)
+  df$pos_in_trial_z <- scale(df$pos_in_trial)
+  df$preced_error_z <- scale(df$preced_error)
+
+  # Specify weakly informative priors $N(0,\sigma^2 = 4)$ for fixed-effects:
+  myprior <- set_prior("normal(0, 2)", class = "b")  
+
+  # fit full model (with interaction):
+  bfm_binom <- brm(
+    Error ~ 
+      1 + movement * word_type +  # critical manipulations and interaction
+      trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
+      (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
+    data = df,
+    prior = myprior,
+    family = "bernoulli",
+    iter = 10000, warmup = 1000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
+    save_all_pars = TRUE  # necessary for brms::bayes_factor() later
+  )
+  model_name <- paste("glmm_simul_data", deparse(substitute(df), "_full", sep = ""))
+  saveRDS(bfm_binom, file = paste("data/", model_name, ".rds", sep =""))
+
+# # without interaction
+# bfm_binom_nointeract <- update(
+#   bfm_binom, formula = ~ . -movement : word_type  # Same but without the interaction term
+#   )
+# saveRDS(bfm_binom_nointeract, "data/bayes_glmm_normprior_nointeract.rds")
+  list(bfm_binom, df)
+  
+}
+out <- analyse_pipe(d_60)
+
+```
+
+```{r}
+analyse_pipe(d_60)
+```
+
+
+At $N=60$
+---------
+
+
+### Fit model
+
+```{r}
+f
+```
+
+
+### Plot data
+
+```{r}
+plot <- d_60 %>% group_by(subject, movement, word_type) %>%
+  summarise(M = mean(Error),
+            Sum = sum(Error)) %>%
+  mutate(sbj_wtype = paste(subject, word_type, sep = "_")) %>%
+  ggplot(aes(x = movement, colour = word_type, y = M)) +
+  stat_summary(fun.y = mean, geom = "point", size = 4,
+               position = position_dodge(width = .25)) +
+  stat_summary(fun.y = mean, geom = "line", aes(group = word_type), size = 2,
+               position = position_dodge(width = .25)) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.2, size = 2,
+               position = position_dodge(width = .25)) +
+  ylim(0, 1) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position="top")
+plot
+
+plot +
+  geom_jitter(height = 0, width = .05, alpha = .5) +
+  geom_line(aes(group = sbj_wtype), alpha = .25)
+
+```
+
+
+
+
+
+
+Session info
+============
+
+```{r}
+sessionInfo()
+```
+

@@ -1,5 +1,7 @@
 # My ignored files
 
+*test.R
+
 *.html
 
 *.pdf

@@ -197,27 +197,17 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
   contrasts(df$movement) <- contr.sum(2)
   colnames(contrasts(df$movement)) <- "arms_vs_legs"
   print(contrasts(df$movement))
+  
   contrasts(df$word_type) <- contr.sum(2)
   colnames(contrasts(df$word_type)) <- "arms_vs_legs"
   print(contrasts(df$word_type))
+  
   df$trial_in_exp_z <- scale(df$trial_in_exp)
   df$pos_in_trial_z <- scale(df$pos_in_trial)
   df$preced_error_z <- scale(df$preced_error)
 
   # Specify weakly informative priors $N(0,\sigma^2 = 4)$ for fixed-effects:
   myprior <- set_prior("normal(0, 2)", class = "b")  
-
-  # # Toy model for testing
-  # bfm_binom <- brm(
-  #   Error ~ 1 + movement + (1 | subject),
-  #   data = df,
-  #   prior = myprior,
-  #   family = "bernoulli"
-  # )
-  # # No inter
-  # bfm_binom_nointeract <- update(
-  #   bfm_binom, formula = ~ . -movement
-  # )
 
   # fit full model (with interaction):
   bfm_binom <- brm(
@@ -247,19 +237,22 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
 }
 ```
 
-```{r}
-sim_d_60 <- analyse_pipe(d_60)
-```
-
 
 At $N=60$
 ---------
 
-
-### Fit model
+### Fit models
 
 ```{r}
-f
+# sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
+sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
+```
+
+
+
+```{r}
+summary(sim_d_60[[1]])
+# summary(sim_d_60[[2]])
 ```
 
 

@@ -9,6 +9,8 @@
 
 myfigures/*
 
+# Large data files
+data/analysis_simulated_*
 
 ######################################################
 

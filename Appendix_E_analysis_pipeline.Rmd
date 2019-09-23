@@ -180,19 +180,19 @@ d_96 <- d %>% filter(subject %in% 1 : 96)
 ```
 
 
-Plot and analyze data
+Analyze and plot data
 =====================
 
-We create a function that streamlines data processing, model fitting, and 
-computation of Bayes factors:
-
+We create a function that streamlines data processing and model fitting:
 
 ```{r}
 analyse_pipe <- function(df) {  # it expects the data frame in above format
   
+  df_name <- deparse(substitute(df))  # to use for filename later
+  
   # Drop superfluous columns
   df <- select(df, subject : Error)
-  
+
   # coding scheme: contrast code factors and standardize numerical predictors
   contrasts(df$movement) <- contr.sum(2)
   colnames(contrasts(df$movement)) <- "arms_vs_legs"
@@ -207,9 +207,21 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
   # Specify weakly informative priors $N(0,\sigma^2 = 4)$ for fixed-effects:
   myprior <- set_prior("normal(0, 2)", class = "b")  
 
+  # # Toy model for testing
+  # bfm_binom <- brm(
+  #   Error ~ 1 + movement + (1 | subject),
+  #   data = df,
+  #   prior = myprior,
+  #   family = "bernoulli"
+  # )
+  # # No inter
+  # bfm_binom_nointeract <- update(
+  #   bfm_binom, formula = ~ . -movement
+  # )
+
   # fit full model (with interaction):
   bfm_binom <- brm(
-    Error ~ 
+    Error ~
       1 + movement * word_type +  # critical manipulations and interaction
       trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
       (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
@@ -219,23 +231,24 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
     iter = 10000, warmup = 1000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
     save_all_pars = TRUE  # necessary for brms::bayes_factor() later
   )
-  model_name <- paste("glmm_simul_data", deparse(substitute(df), "_full", sep = ""))
-  saveRDS(bfm_binom, file = paste("data/", model_name, ".rds", sep =""))
-
-# # without interaction
-# bfm_binom_nointeract <- update(
-#   bfm_binom, formula = ~ . -movement : word_type  # Same but without the interaction term
-#   )
-# saveRDS(bfm_binom_nointeract, "data/bayes_glmm_normprior_nointeract.rds")
-  list(bfm_binom, df)
+  # model without interaction
+  bfm_binom_nointeract <- update(
+    bfm_binom, formula = ~ . -movement:word_type  # Same but without the interaction term
+    )
   
-}
-out <- analyse_pipe(d_60)
+  # pack models and data into list
+  out <- list(bfm_binom, bfm_binom_nointeract, df)
+  names(out) <- paste(df_name, c("bfm_full", "bfm_nointer", "dataset"), sep = "_")
 
+  # save list to disk:
+  saveRDS(out, file = paste("data/analysis_simulated_", df_name, ".rds", sep =""))
+  
+  out
+}
 ```
 
 ```{r}
-analyse_pipe(d_60)
+sim_d_60 <- analyse_pipe(d_60)
 ```
 
 

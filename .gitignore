@@ -1,3 +1,13 @@
+# My ignored files
+
+*.html
+
+*.pdf
+!Appendix_A_sp13_after-replication-recipe.pdf
+
+
+######################################################
+
 # History files
 .Rhistory
 .Rapp.history

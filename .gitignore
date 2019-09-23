@@ -7,6 +7,8 @@
 *.pdf
 !Appendix_A_sp13_after-replication-recipe.pdf
 
+myfigures/*
+
 
 ######################################################
 

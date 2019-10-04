@@ -40,9 +40,28 @@ library("sjlabelled")
 ```
 
 
+Model from the re-analysis of original data:
+
 ```{r}
 # Load brms model fitted to original data
 bfm_orig <- readRDS("data/bayes_glmm_normprior_interact.rds")
+```
+
+Extract posterior for interaction coefficient to use later as prior for
+replication BF:
+
+```{r}
+# Extract posterior estimates for the critical interaction effect from the brms
+# model (pull converts it to a numerical vector):
+beta_posterior <- pull(posterior_samples(bfm_orig, "movementarm_vs_leg:word_typearm_vs_leg"))
+# check normality
+qqnorm(beta_posterior)
+qqline(beta_posterior,col='red')
+# We will assume normality here. Note that it is misleading (some say pointless)
+# to check for normality with very large vectors, see
+# https://stats.stackexchange.com/questions/2492/is-normality-testing-essentially-useless
+mean_inter_post <- mean(beta_posterior)
+sd_inter_post   <- sd(beta_posterior)
 ```
 
 
@@ -191,9 +210,13 @@ Analyze and plot data
 Create a function that streamlines data processing and model fitting:
 
 ```{r}
-analyse_pipe <- function(df) {  # it expects the data frame in above format
+analyse_pipe <- function(
+  df,            # expects the data frame in above format
+  repBF = FALSE  # compute replication BF?
+  ) {
   
   df_name <- deparse(substitute(df))  # to use for filename later
+  if (repBF) { df_name <- paste(df_name, "repBF", sep = "_") }
   
   # Drop superfluous columns (those that won't be in the actual data)
   df <- select(df, subject : Error)
@@ -211,14 +234,28 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
   df$pos_in_trial_z <- scale(df$pos_in_trial)
   df$preced_error_z <- scale(df$preced_error)
 
-  # Specify weakly informative priors: N(0,sigma^2 = 4) for population-level
-  # (fixed) effects:
-  myprior <- set_prior("normal(0, 2)", class = "b")  
+  # As default, specify weakly informative priors: N(0,sigma^2 = 4) for
+  # population-level (fixed) effects
+  # NB: In Stan a normal distribution is specified with sigma (*not* sigma^2), see
+  # https://mc-stan.org/docs/2_18/functions-reference/normal-distribution.html
+  # and
+  # https://stackoverflow.com/questions/52893379/stan-in-r-standard-deviation-or-variance-in-normal-distribution
+  myprior <- set_prior("normal(0, 2)", class = "b")
+  print(myprior)
+  # for replication BF, use the posterior of the re-analysis as prior for interaction:
+  myprior_repBF <- c(
+    myprior,
+    set_prior("normal(0.149, 0.0418)", class = "b",
+              coef = "movementarms_vs_legs:word_typearms_vs_legs")
+    )
+  print(myprior_repBF)
 
-  # fit full model (with interaction):
-  bfm_binom <- brm(
+  # Model *without* interaction
+  # NB: for the replication BF, we need now to remove prior for interaction
+  # (which is not defined in the model):
+  bfm_binom_nointeract <- brm(
     Error ~
-      1 + movement * word_type +  # critical manipulations and interaction
+      1 + movement + word_type +  # critical manipulations but no interaction
       trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
       (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
     data = df,
@@ -227,10 +264,19 @@ analyse_pipe <- function(df) {  # it expects the data frame in above format
     iter = 15000, warmup = 2000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
     save_all_pars = TRUE  # necessary for brms::bayes_factor() later
   )
-  # model without interaction
-  bfm_binom_nointeract <- update(
-    bfm_binom, formula = ~ . -movement:word_type  # Same but without the interaction term
-    )
+  
+  # fit full model (with interaction):
+  bfm_binom <- brm(
+    Error ~
+      1 + movement * word_type +  # critical manipulations and interaction
+      trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
+      (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
+    data = df,
+    prior = if (repBF) { myprior_repBF } else { myprior },
+    family = "bernoulli",
+    iter = 15000, warmup = 2000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
+    save_all_pars = TRUE  # necessary for brms::bayes_factor() later
+  )
   
   # pack models and data into a list and give sensible names to each object
   out <- list(bfm_binom, bfm_binom_nointeract, df)
@@ -286,7 +332,6 @@ summary(sim_d_60[[1]])
 BF_bfm_d60 <- readRDS("data/BF_bfm_d60.rds")
 ```
 
-
 ```{r}
 BF_bfm_d60
 ```
@@ -320,6 +365,84 @@ Plot the interaction effect:
 
 ```{r}
 plot(marginal_effects(sim_d_60[[1]], effects = "movement:word_type"),
+     theme = theme_classic())
+```
+
+
+### Replication Bayes factor (after Verhagen and Wagenmakers, 2014)
+
+For the replication BF we use as the prior for the interaction the posterior
+distribution from the model fitted to the original data. We specify this as
+a normal distribution (see "Set up workspace" for this prior).
+
+
+#### Fit models with appropriate prior for repBF:
+
+```{r}
+# sim_d_60_BFrep <- analyse_pipe(d_60, repBF = TRUE)  # takes about  hours
+sim_d_60_BFrep <- readRDS("data/analysis_simulated_d_60_repBF.rds")
+names(sim_d_60_BFrep)
+```
+
+Summary of priors:
+
+```{r}
+prior_summary(sim_d_60_BFrep[[1]])
+prior_summary(sim_d_60_BFrep[[2]])
+```
+
+Model summary
+
+```{r}
+summary(sim_d_60_BFrep[[1]])
+summary(sim_d_60_BFrep[[2]])
+```
+
+
+#### Replication BF
+
+Replication Bayes factor:
+
+```{r}
+# # Run and save to disk
+# BFrep_bfm_d60 <- brms::bayes_factor(
+#   sim_d_60_BFrep[[1]], sim_d_60_BFrep[[2]]
+#   )
+# saveRDS(BFrep_bfm_d60, "data/BFrep_bfm_d60.rds")
+```
+
+```{r}
+# Once run, read from disk
+BFrep_bfm_d60 <- readRDS("data/BFrep_bfm_d60.rds")
+```
+
+```{r}
+BFrep_bfm_d60
+```
+
+#### Plots
+
+```{r}
+sjPlot::plot_model(
+  sim_d_60_BFrep[[1]], transform = NULL, prob.outer = .95, sort.est = TRUE,
+  vline.color = "gray", title = "Log-odds of error",
+  axis.labels = c(  # Careful: indep of sort.est, the order is simply specified bottom to top!
+    "word type (arm- vs leg-related)",
+    "movement condition (arms vs legs)",
+    "preceding error in trial",
+    "word position in trial",
+    "trial in experiment",
+    "movement-by-word type interaction"
+    )
+  ) +
+  theme_classic()
+```
+
+
+Plot the interaction effect:
+
+```{r}
+plot(marginal_effects(sim_d_60_BFrep[[1]], effects = "movement:word_type"),
      theme = theme_classic())
 ```
 

@@ -37,6 +37,7 @@ library("brms")
 library("tidyverse")
 library("sjPlot")
 library("sjlabelled")
+library("moments")
 ```
 
 
@@ -57,6 +58,8 @@ beta_posterior <- pull(posterior_samples(bfm_orig, "movementarm_vs_leg:word_type
 # check normality
 qqnorm(beta_posterior)
 qqline(beta_posterior,col='red')
+moments::kurtosis(beta_posterior)
+moments::skewness(beta_posterior)
 # We will assume normality here. Note that it is misleading (some say pointless)
 # to check for normality with very large vectors, see
 # https://stats.stackexchange.com/questions/2492/is-normality-testing-essentially-useless

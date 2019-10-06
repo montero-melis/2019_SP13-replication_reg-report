@@ -60,8 +60,8 @@ qqnorm(beta_posterior)
 qqline(beta_posterior,col='red')
 moments::kurtosis(beta_posterior)
 moments::skewness(beta_posterior)
-# We will assume normality here. Note that it is misleading (some say pointless)
-# to check for normality with very large vectors, see
+# We may safely assume normality. NB: Shapiro test doesn't work if 
+# length(v) > 5000, and is problematic for other reasons as well. See:
 # https://stats.stackexchange.com/questions/2492/is-normality-testing-essentially-useless
 mean_inter_post <- mean(beta_posterior)
 sd_inter_post   <- sd(beta_posterior)

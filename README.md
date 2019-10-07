@@ -7,7 +7,7 @@ In accordance with the Peer Reviewers’ Openness Initiative (Morey et al., 2016
 all materials and scripts associated with this manuscript are available at
 https://osf.io/ktsfw/?view_only=63e3071ba35641a0ba11785324e427e3
 
-List of appendices:
+List of appendices (html files can be opened in any modern web browser):
 
 - Appendix A: Systematic comparison of the original study and our replication
   following Brandt et al.’s (2014) "replication recipe".

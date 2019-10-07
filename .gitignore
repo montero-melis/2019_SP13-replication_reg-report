@@ -3,6 +3,9 @@
 *test.R
 
 *.html
+!Appendix_B_reanalysis_original.html
+!Appendix_C_bfda_sp13.html
+!Appendix_E_analysis_pipeline.html
 
 *.pdf
 !Appendix_A_sp13_after-replication-recipe.pdf

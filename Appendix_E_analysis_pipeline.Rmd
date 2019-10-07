@@ -207,8 +207,17 @@ d_96 <- d %>% filter(subject %in% 1 : 96)
 ```
 
 
-Analyze and plot data
+Analyze and plot data (analysis pipeline)
 =====================
+
+We show the data analysis pipeline for a data set corresponding to a sample
+size of $N=60$. If the Bayes factor was below hour pre-determined evidence
+threshold ($\frac{1}{6} < BF_{10} < 6$), then we would collect an additional
+batch of 12 participants and repeat the same analysis.
+
+
+Function for data analysis
+--------------------------
 
 Create a function that streamlines data processing and model fitting:
 
@@ -293,19 +302,16 @@ analyse_pipe <- function(
 ```
 
 
-At $N=60$
----------
 
-### Fit models
+Fit models
+----------
+
 
 ```{r}
 # sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
 sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
 names(sim_d_60)
 ```
-
-
-### Model summary
 
 Summary of priors:
 
@@ -314,13 +320,20 @@ prior_summary(sim_d_60[[1]])
 ```
 
 
+Model summary
+------------
+
+Full model with the critical interaction:
+
 ```{r}
 summary(sim_d_60[[1]])
-# summary(sim_d_60[[2]])
 ```
 
 
-### Bayes factor
+Bayes factor
+------------
+
+Compute Bayes factor (or load from disk):
 
 ```{r}
 # # Run and save to disk
@@ -335,13 +348,18 @@ summary(sim_d_60[[1]])
 BF_bfm_d60 <- readRDS("data/BF_bfm_d60.rds")
 ```
 
+
+Actual Bayes factor comparing $H_1$ (the critical interaction is not zero) to 
+$H_0$ (the critical interaction is zero):
+
 ```{r}
 BF_bfm_d60
 ```
 
 
 
-### Plot model estimates
+Plot model estimates
+--------------------
 
 Plot all population-level estimates. Inner boxes show 50%, outer error bars 95%
 credible intervals (see detailed 
@@ -372,14 +390,19 @@ plot(marginal_effects(sim_d_60[[1]], effects = "movement:word_type"),
 ```
 
 
-### Replication Bayes factor (after Verhagen and Wagenmakers, 2014)
+Replication Bayes factor (after Verhagen and Wagenmakers, 2014)
+---------------------------------------------------------------
+
+If the standard BF is above the pre-determined evidence threshold *or* 
+if we have reached $maxN=96$,
+then we also compute the replication Bayes factor (Verhagen and Wagenmakers, 2014).
 
 For the replication BF we use as the prior for the interaction the posterior
 distribution from the model fitted to the original data. We specify this as
 a normal distribution (see "Set up workspace" for this prior).
 
 
-#### Fit models with appropriate prior for repBF:
+### Fit models with appropriate prior for repBF:
 
 ```{r}
 # sim_d_60_BFrep <- analyse_pipe(d_60, repBF = TRUE)  # takes about  hours
@@ -394,15 +417,15 @@ prior_summary(sim_d_60_BFrep[[1]])
 prior_summary(sim_d_60_BFrep[[2]])
 ```
 
-Model summary
+Model summary (full model with interaction)
 
 ```{r}
 summary(sim_d_60_BFrep[[1]])
-summary(sim_d_60_BFrep[[2]])
+# summary(sim_d_60_BFrep[[2]])
 ```
 
 
-#### Replication BF
+### Replication BF
 
 Replication Bayes factor:
 
@@ -419,11 +442,13 @@ Replication Bayes factor:
 BFrep_bfm_d60 <- readRDS("data/BFrep_bfm_d60.rds")
 ```
 
+Actual $BF_{rep}$:
+
 ```{r}
 BFrep_bfm_d60
 ```
 
-#### Plots
+### Plots
 
 ```{r}
 sjPlot::plot_model(

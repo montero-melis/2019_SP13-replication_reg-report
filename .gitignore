@@ -9,11 +9,13 @@
 
 *.pdf
 !Appendix_A_sp13_after-replication-recipe.pdf
+!sp13_replic_reg-report_ms.pdf
 
 myfigures/*
 
 # Large data files
 data/analysis_simulated_*
+
 
 ######################################################
 

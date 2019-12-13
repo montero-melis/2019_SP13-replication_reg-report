@@ -262,7 +262,7 @@ d_09 <- round(with(d_4ttest, (mean(match) - mean(mismatch)) / sd(match - mismatc
 No; we obtain a Cohen's $d = `r d_09`$, unlike the figure reported in SP13.
 
 
-### Computing $d$ from $\eta^2$?
+### Computing $d$ from (partial) $\eta^2$?
 
 Eta squared ($\eta^2$) is the most commonly used measure of effect size for ANOVAs: It 
 "measures the proportion of the total variance in a dependent variable that is
@@ -276,24 +276,34 @@ eta_sq
 # sjstats::eta_sq(aov_orig)  # yields same results
 ```
 
-The value for the critical movement--word type interaction interaction of interest is 
-$\eta^2 = `r round(eta_sq[3,1], 2)`$.
+The value for the critical movement--word type interaction of interest is one of
+two:
 
-We tried two methods of converting $\eta^2$ to Cohen's $d$:
+a) $\eta^2 = `r round(eta_sq[3,1], 2)`$
+b) partial $\eta^2 = `r round(eta_sq[3,2], 2)`$.
+
+
+We tried two methods of converting (partial) $\eta^2$ to Cohen's $d$ and we
+computed two values with each method, once for $\eta^2$ and once for partial
+$\eta^2$:
 
 1. [This online calculator](https://www.psychometrica.de/effect_size.html)
-converts between different effect size measures (see section 13). When plugging
-in $\eta^2 = 0.04$, the corresponding effect size is $d = 0.41$, which is far
-off from the figure reported in SP13!
+converts between different effect size measures (see section 13):
+    a) When plugging in $\eta^2 = `r round(eta_sq[3,1], 2)`$, the corresponding
+    effect size is $d = 0.41$, which is far off from the figure reported in SP13.
+    b) When plugging in partial $\eta^2 = `r round(eta_sq[3,2], 2)`$, the 
+    corresponding effect size is $d = 1.92$, which is also different from that
+    reported in the original (but in this case, it is greater).
 2. [This IBM support website](https://www-01.ibm.com/support/docview.wss?uid=swg21476421)
-cites formulae to convert between Eta-squared, Cohen's $f$, and
+cites formulae to convert between $\eta^2$, Cohen's $f$, and
 Cohen's $d$: 
 \[
 f = \sqrt{ \frac{\eta^2}{1 - \eta^2} };
 d = 2*f
 \]
-This formula yields the same value as above ($d=0.41$) if the `eta.sq` value
-is plugged in, which again doesn't match the value reported in SP13.
+This formula yields exactly the same results as above:
+    a) $d=0.41$ if computed from the  $\eta^2$,
+    b) $d=1.92$ if computed from the partial $\eta^2$.
 
 
 Conclusion

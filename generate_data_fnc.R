@@ -14,8 +14,8 @@ library("boot")  # for inv.logit()
 # is done in the script that calls this function.
 
 # For power analyses:
-# The function could also be used for simulation-based power analyses. Step 3b
-# is very important in that regard, so uncomment if necessary. What it does:
+# The function can also be used for simulation-based power analyses. Step 3b
+# is important in that regard. Here is what it does by default:
 # Rather than sampling *all* fixed effects coefficients from the covariance
 # matrix, step 3b keeps the effect of the critical interaction constant
 # by plugging the intended interaction effect back in (see step 3b). This makes
@@ -25,7 +25,9 @@ library("boot")  # for inv.logit()
 # (The relevant discussion is found in email correspondence with Florian
 # (see e-mail sent by Jaeger, Florian <fjaeger@UR.Rochester.edu>; Subj: "Re:
 # Pragmatic advice on power analysis to determine sample size for conceptual
-# replication", sent on Sat 2018-10-13 04:46)
+# replication", sent on Sat 2018-10-13 04:46).
+# To sample the critical effect from the estimated distribution, set the
+# parameter 'keep_critical_effect_constant' to FALSE
 
 simulate_binom <- function (
   Nsubj  = 2,  # Number of participants
@@ -34,6 +36,7 @@ simulate_binom <- function (
   fixef_sigma,        # covariance matrix for fixed effects (diagonals contain SE^2)
   ranef_sigma_subj,   # covariance matrix for random effects by subject
   ranef_sigma_item,   # covariance matrix for random effects by item
+  keep_critical_effect_constant = TRUE,  # see comment in paragraph above
   full_output = TRUE,      # Output list with fixef/ranef dfs in addition to data?
   print_each_step = FALSE  # print output at each step to unveil inner workings
   ) {
@@ -112,8 +115,8 @@ simulate_binom <- function (
     sigma = fixef_sigma  # covariance of fixed effects
     )
   myprint(fixef)
-  # 3b) But now plug the intended coefficient for the interaction back in.
-  fixef[4] <- fixef_means[4]
+  # 3b) Plug the intended coefficient for the interaction back in (by default).
+  if (keep_critical_effect_constant) { fixef[4] <- fixef_means[4] }
   myprint(fixef)
   # 3c) Save fixed effects as df for output
   fixef_df <- tibble(coef = colnames(fixef), betas = fixef[1, ])

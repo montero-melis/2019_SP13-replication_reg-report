@@ -14,15 +14,83 @@ output:
 Introduction
 ============
 
-This knitr script executes and reports the Bayes factor design analyses (BFDA) 
-for our replication of Shebani and Pulvermüller (2013, *Cortex*), henceforth SP13.
-All simulations are done in the framework laid out in Schönbrodt and Wagenmakers
-(2017, *Psychon Bull Rev*), and implemented using the `BFDA` package (Schönbrodt
-& Stefan, 2018; https://github.com/nicebread/BFDA).
-See end of document for session info, including package versions, etc.
+This knitr script executes and reports a Bayes factor design analysis for our
+replication of Shebani and Pulvermüller (2013, *Cortex*), henceforth SP13.
 
 This document complements our manuscript submitted as a Registered Report to
-*Cortex*. See the manuscript for further context.
+*Cortex*. See end of document for session info, including package versions, etc.
+and the manuscript for further context.
+
+
+General approach
+---------------
+
+We adopt the following approach for our Bayes factor design analysis (see
+Schönbrodt and Wagenmakers, 2017, *Psychon Bull Rev*):
+
+1. Simulate data sets with parameters obtained from the analysis of the
+original data and other parameters estimated from pilot data.
+2. Fit two logisic mixed models to each data set using `lme4`, one that includes
+the critical interaction effect as a population-level (fixed) effect and another
+that does not.
+3. Compute a Bayes factor for the alternative hypothesis (H1: there is an effect)
+vs the null hypothesis (H0: there is no effect) using the Bayesian information
+criterion (BIC) of each of the models (see 
+[this link](https://rpubs.com/lindeloev/bayes_factors) for the exact approach).
+4. Repeat steps 1-3 a large number of times for different sample sizes and for
+a scenario in which the critical effect is zero (Type 1 simulations) and a 
+scenario where the critical effect exists (Type 2 simulations).
+
+
+About the parameters of our statistical generative model
+----------------------------------------
+
+Data simulations are based on our re-analysis of the original data as shared by
+SP13. Since that data set did not consist of trial-level observations, we do not
+have a way to estimate item-level variability from it.
+We therefore use our own pilot data to estimate item-level variability (details
+below).
+We assume a generative model for the simulations that mimicks
+our own experimental setup. Each participant generates data for the four
+experimental cells defined by our 2x2 design with the following factors:
+
+- Word type: arm words vs leg words
+- Interference Movement: arm vs foot movement
+
+There are 104 items (52 arm and 52 leg words) in our study, so we simulate
+208 observations per participant.
+Each data set is randomly generated under a probabilistic binomial (Bernoulli)
+hierarchical model in which the log-odds of producing an error are a function
+of the population-level (fixed) effects predictors Interference Movement
+(arm movements vs. leg movements), Word Type (arm-related vs leg-related words),
+and their interaction. In addition, random effects variance was added by
+participants (for intercepts and all the fixed effects and interaction slopes)
+and items (for intercepts and slopes for Interference Movement). The simulations
+cross the following factors:
+
+1) Participant sample size: N=15, 60, 108; that is, the original sample size, 
+$N_{min}$, and $N_{max}$, respectively.
+2) Simulation type: Type 1 (critical population-level effect set to zero), type 2
+(critical population-level effect sampled from the model of the original data).
+
+
+
+Justification of BIC approach
+-----------------------------
+
+There is a practical reason we do not run simulations using the fully Bayesian
+approach we will use for our main analysis:
+It takes roughly 2 hours to run each analysis of a simulated data set using
+`brms` and bridge sampling (as implemented in our analysis pipeline, see
+[Appendix_E_analysis_pipeline](https://github.com/montero-melis/2019_SP13-replication_reg-report/blob/master/Appendix_E_analysis_pipeline.html)).
+If we used this approach to simulate 10,000 data sets for three different Ns, 
+and the two simulation types, it would take approximately 
+$10000 \times 3 \times 2 = 60000$ hours,
+or almost *seven years* to run the simulations.
+Our approach is a compromise that allows for a good enough estimation of Bayes
+factors taking into account the specifics of our design as opposed to 
+off-the-shelve R packages like `BFDA` (Schönbrodt & Stefan, 2018).
+The simulations still took several days to run on a computer cluster.
 
 
 Setup workspace
@@ -32,382 +100,779 @@ Setup workspace
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r, message=FALSE}
+```{r, message=FALSE, waning=FALSE}
 library("knitr")
 library("tidyverse")  # ggplot2, dplyr, readr, purrr, etc
+library("broom")
 library("boot")       # for inv.logit()
-library("BFDA")
+library("lme4")
 library("brms")
+library("tictoc")
+library("ggpubr")
+library("foreach")     # to parallelize simulations
+library("doParallel")  # to parallelize simulations
 ```
-
-
-Load model fitted on original data:
-
-```{r, message=FALSE}
-# Binomial GLMM of the original data (fitted with brms); see script 
-# "Appendix_B_reanalysis_original.Rmd"
-bfm_binom <- readRDS("data/bayes_glmm_normprior_interact.rds")
-```
-
-*brms* has a `posterior_samples(x, pars)` function to get posterior traces for
-specific coefficients. We pass our fitted *brms* model as x, and the predictor
-of interest as pars, and obtain a dataframe with the samples in return.
-This posterior from the original we can then use as the prior for the Bayes 
-factor design analysis (BFDA) in our replication.
 
 ```{r}
-# Extract posterior estimates for the critical interaction effect from the brms
-# model (pull converts it to a numerical vector):
-beta_posterior <- pull(posterior_samples(bfm_binom, "movementarm_vs_leg:word_typearm_vs_leg"))
+# Global plotting parameters
+myalpha <- 0.05
+jitter_colour <- "dodgerblue3"
+theme_set(theme_bw())
 ```
 
 
-Convenience function:
+```{r}
+# Load original data from SP13
+d <- read_csv("data/SP13_orig-data_total-errors_long-format.csv") %>%
+  # keep critical interference conditions only
+  filter(movement %in% c("arm_paradi", "leg_paradi"))
+# For each experimental cell, the maximum number of errors is 48 (see
+# "Appendix_B_reanalysis_original.Rmd" for justification0)
+d$n <- 48
+```
+
+
+Model of original data 
+======================
+
+The model takes some time to fit with `brms`, so retrieve it from disk:
 
 ```{r}
-# Wrapper function to display the results of the simulation:
-results_sim <- function(sim, pow = FALSE, bound = c(1/6, 6)) {
-  print(BFDA.analyze(sim, design = "sequential", boundary = c(1/6, 6)))
-  plot(sim, boundary = bound)  # pass argument if it crashes with default
-  if (pow) { SSD(sim, power=.9, boundary=c(1/6, 6)) }
+# Load from disk - list containing 1) full model, 2) null model, 3) BF
+bfm_max <- read_rds("data/sp13_bfm_max.rds")
+```
+
+```{r}
+bfm_full <- bfm_max[[1]]
+summary(bfm_full)
+```
+
+
+
+
+Power simulations
+=================
+
+Prepare data generating process
+-------------------------------
+
+### Load function
+
+Load the function that generates binomial data for our design.
+
+```{r}
+source("generate_data_fnc.R")
+```
+
+
+### Set up simulation parameters
+
+We take our simulation parameters from the statistical model fit to the original
+data. Next we put these parameters into the right format for our 
+`simulate_binom()` function:
+
+```{r}
+# Fixed (i.e., population-level) effects:
+fixef(bfm_full)
+
+# Vector of coefficient means for fixed effects
+fixef_means <- fixef(bfm_full)[, 1]
+fixef_means
+
+# SEMs for fixed effects. These we take from the covariance matrix (Sigma) of
+# the model. Note we need to square the SEMs to convert them to variances, which
+# is what our simulate_binom() function expects (rather than SD).
+fixef_sigma <- diag(fixef(bfm_full)[, 2] ^ 2)  # we assume uncorrelated diagonal matrix
+fixef_sigma
+
+# By-subject random effects for the model:
+VarCorr(bfm_full)$subject$sd
+# Extract by-subject random SDs and square them to obtain variances:
+ranef_sigma_subj <- diag(VarCorr(bfm_full)$subject$sd[, 1]) ^ 2
+ranef_sigma_subj
+```
+
+The original data consists of aggregated by-subject data, not trial-level data.
+To obtain estimates for item-level variability we use our own pilot data (see
+[here](https://github.com/montero-melis/2018_replication_sheb-pulv2013/blob/master/1806_pilot_analysis/item-variance_estimates.R)).
+
+
+```{r}
+# The random by-item intercept is SD=0.65. However, we don't have estimates for
+# by-item random slope for movement because we only ran the control condition in
+# the pilot. We will assume the SD for this random slope to be the same as the
+# by-subject SD for the slope of the critical interaction, which is likely to be
+# an overestimate. If so, it will only make our power estimates more conservative:
+ranef_sigma_item <- diag(c(0.65, 0.06)) ^ 2  # square to obtain variances
+ranef_sigma_item
+```
+
+
+### Example simulation
+
+We can now call the `simulate_binom` function to generate data:
+
+```{r, message = FALSE}
+set.seed(753)
+sim_ex <- simulate_binom(
+  Nsubj = 10,
+  Nitem = 24,
+  fixef_means = fixef_means,
+  fixef_sigma = fixef_sigma,
+  ranef_sigma_subj = ranef_sigma_subj,
+  ranef_sigma_item = ranef_sigma_item
+  )
+sim_ex
+```
+
+
+
+Functions to analyze simulations
+--------------------------------
+
+### Basic function
+
+```{r}
+analyze_simulation <- function(df, print_model_summaries = FALSE) {
+
+  # start counter
+  tic()
+
+  # Contrast coding (umeric coding allows for models without RE correlations)
+  df$mv <- scale(as.numeric(df$movement), scale = FALSE) * -2
+  df$wt <- scale(as.numeric(df$word_type), scale = FALSE) * -2
+  df$mv_wt <- df$mv * df$wt
+
+  # function to catch convergence issues
+  converge <- function (fm) {
+  # Paste in case there are several messages
+  message <- paste(summary(fm)$optinfo$conv$lme4$messages, collapse = " / ")
+  if( is.null(message) ) { "" } else { message }
+  }
+  
+  # Function to fit a full and null model given model formula as string:
+  fit_formula <- function (f_str, d = df) {
+    formula <- as.formula(f_str)  # convert to formula
+    full <- glmer(formula, data = d,
+                  control = glmerControl(optCtrl=list(maxfun=1e6)),
+                  family = "binomial"
+                  )
+    null <- update(full, formula = ~ . - mv_wt)
+
+    if (print_model_summaries) {
+      print(summary(full))
+      print(summary(null))
+    }
+    list(full, null)
+  }
+  
+  # Fit models without RE correlations using double-bar syntax
+  # (see Reinhold Kliegl's post: https://rpubs.com/Reinhold/391071)
+  myf <- "Error ~ mv + wt + mv_wt + (1 + mv + wt + mv_wt || subject) + (1 + mv || item)"
+  models <- fit_formula(myf)
+
+  # Put fixed effect model coefficients into one data frame
+  model_info <- bind_rows(
+    unnest(tidy(models[[1]])) %>%
+      mutate(model = "full", convergence = converge(models[[1]])),
+    unnest(tidy(models[[2]])%>% filter(group == "fixed" | grepl("mv_wt", term))) %>%
+      mutate(model = "null", convergence = converge(models[[2]]))
+  ) %>%
+    # Now add more concise info (redundantly repeated across rows, can be filtered
+    # out later):
+    mutate(
+      BIC_full = BIC(models[[1]]),
+      BIC_null = BIC(models[[2]]),
+      BF_BIC = exp( (BIC(models[[2]]) - BIC(models[[1]]) ) / 2),
+      conv_full = converge(models[[1]]),
+      conv_null = converge(models[[2]]),
+      formula_full = myf
+    ) %>%
+    select(-group)
+  # Add the time it took
+  mytoc <- toc()
+  model_info$t_ellapsed <- mytoc$toc - mytoc$tic
+  model_info
 }
 ```
 
 
-Some notes on the simulations below
-===================================
+Let's illustrate with an example (using the data set simulated above).
 
-1. For each set of simulations below, we simulated 10 000 studies (`B = 10000`),
-which is the recommendation by the package authors (see 
-[BFDA manual](https://rawgit.com/nicebread/BFDA/master/package/doc/BFDA_manual.html))
-2. Running these simulations often takes a long time (from a few minutes to a few
-hours on a laptop). Here and below we have run the simulations once and saved
-them to disk so that they can simply be loaded when running this script. To run
-them anew, please uncomment the relevant code snippets.
+```{r, message=FALSE, warning=FALSE}
+set.seed(753)
+tictoc::tic()
+# print_model_summaries=TRUE would print the actual model summaries to screen
+an_ex <- analyze_simulation(sim_ex, print_model_summaries = FALSE)
+tictoc::toc()
+```
 
-
-BFDA using effect size and analysis reported in the original study
-============================================
-
-SP13 report an effect size of Cohen's $d = 1.25$ (p.226) for the critical
-interaction effect obtained from a within-subjects ANOVA. Our first BFDA
-follows this estimate, applying a paired t-test design, which is the closest
-available test to the within-subjects ANOVA, and also the one that naturally
-accepts Cohen's $d$ as an effect size estimate.
-
-We run the simulation with the default (non-informative) prior so as to err on
-the conservartive side.(see Stefan et al., 2019, *Behav Res Meth*, for a 
-discussion of choice of prior).
-
-
-
-Simulate hypothetical studies
------------------------------
+The output is a data frame with information about the analysis of the simulated
+data set. Note that the first columns are unique (they are about parameter
+estimates in the model), but starting from the convergence column the info is
+repeated across rows. We will mostly use results from the BIC of every model
+but all the other output is good to keep to better understand what is going on
+and what the actual parameter estimates are for the different models:
 
 ```{r}
-# # Run simulations and save to disk:
-# 
-# # Under alternative hypothesis H1 with ES d = 1.25
-# sim_H1_d_125_defPrior <- BFDA.sim(
-#   expected.ES = 1.25,  # as reported in SP13
-#   type = "t.paired",
-#   prior=list("Cauchy",list(prior.location=0, prior.scale=sqrt(2)/2)),  # default non-informative
-#   n.min=12, n.max=96, stepsize = 12, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H1_d_125_defPrior, "data/sim_H1_d_125_defPrior.rds")
-# 
-# # Under null hypothesis H0
-# sim_H0_d_125_defPrior <- BFDA.sim(
-#   expected.ES = 0,  # under H0
-#   type = "t.paired",
-#   prior=list("Cauchy",list(prior.location=0, prior.scale=sqrt(2)/2)),  # default non-informative
-#   n.min=12, n.max=96, stepsize = 12, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H0_d_125_defPrior, "data/sim_H0_d_125_defPrior.rds")
+kable(head(an_ex, 3))
 ```
 
-Once run, load from disk:
+
+
+
+### Function to analyze many data sets
+
+The following function does the basic work: It is designed to be applied with
+`purrr::pmap` together with a data frame where each row passes the relevant
+parameters that vary across simulations (`Nsubj` and `sim_type`), alon with
+the random seed (`rseed`) to make the simulations reproducible, and yet some
+other information (like `incl_col_names`) which are needed for the functions to
+combine together in the intended way.
+
+Note that this function directly writes simulation results to a file on disk,
+appending new simulation results to whatever already is on the file. This is
+better than generating an R object in the current session: since the simulations
+can take days or weeks, writing to disk makes it possible to break the process
+at any point and resume the simulations later.
+
 
 ```{r}
-# Load from disk
-sim_H1_d_125_defPrior <- read_rds("data/sim_H1_d_125_defPrior.rds")
-sim_H1_d_125_defPrior
-
-sim_H0_d_125_defPrior <- read_rds("data/sim_H0_d_125_defPrior.rds")
-sim_H0_d_125_defPrior
+sim_many <- function(rseed, sim_id, Nsubj, sim_type, incl_col_names, ...) {
+  istype1 <- if (sim_type == "type2") {
+    FALSE
+    } else if (sim_type == "type1") {
+    TRUE
+    } else{
+        stop("sim_type has to be either 'type1' or 'type2'")
+    }
+  set.seed(rseed)
+  df <- simulate_binom(Nsubj, type1 = istype1, ...)
+  result <- analyze_simulation(df)
+  result$sim_id   <- sim_id
+  result$rseed    <- rseed
+  result$sim_type <- sim_type
+  result$Nsubj    <- Nsubj
+  write_csv(
+    result,
+    path = "data/power_simulation_results_append.csv",
+    col_names = incl_col_names,  # only needed first time it's run
+    append = TRUE)
+  result
+}
 ```
 
 
-Results under H1
-----------------
+### Function to tally the simulations left to run
 
-```{r, warning=FALSE}
-results_sim(sim_H1_d_125_defPrior, T)
-```
-
-Results under H0
-----------------
+A function that computes how many simulations we still need to run, based on
+the file on disk that stores simulation results. It outputs FALSE if it doesn't
+find the file. This function is called from the `run_till_aim()` function (below)
+which actually runs the simulations.
 
 ```{r}
-results_sim(sim_H0_d_125_defPrior)
+sim_till_aim <- function(
+  aim,
+  filter_out_nsubj = 0,  # by default this will consider all sample sizes
+  filter_out_type = ""   # by default it will consider type1 and type2
+  ) {
+  neg2zero <- function(x) ifelse(x < 0, 0, x)  # little trick needed below
+  # retrieve simulations and check which ones converged (both null and full)
+  if (file.exists("data/power_simulation_results_append.csv")) {
+    sims <- read_csv("data/power_simulation_results_append.csv")
+  } else {
+    return (FALSE)
+  }
+  # If there are simulations, get the right info about convergence etc
+  sims <- sims %>%
+    select(rseed, Nsubj, sim_type, conv_full, conv_null) %>% unique() %>%
+    mutate(
+      converged = ( is.na(conv_full) & is.na(conv_null) ),
+      Nsubj = as.numeric(Nsubj)
+      ) %>%
+    group_by(Nsubj, sim_type) %>%
+    summarise(sims_run = n(), converged = sum(converged)) %>%
+    mutate(
+      aim = aim,
+      needed_neg = aim - converged,
+      needed = neg2zero(needed_neg)) %>%
+    # Estimated convergence rate at different sample sizes
+    left_join(tibble(
+      Nsubj =     c(15,   60,   96,   102,  108),
+      conv_rate = c(0.13, 0.40, 0.55, 0.56, 0.59))
+      ) %>%
+    mutate(nsims = round(needed / conv_rate)) %>%
+    filter(
+      (! Nsubj %in% filter_out_nsubj),
+      (sim_type != filter_out_type)
+      )
+  sims
+}
 ```
 
 
 
-BFDA based on our improved re-analysis (binomial GLMM) of the original data
-=======================================================================
+### Wrapper function
 
-Analyzing the error data (as in SP13) using ANOVAs or t-tests violates some
-of the assumptions of those models.
-A better statistical analysis is to treat the errors participants made as
-arising from a binomial distribution and capture  subject-level variability
-using Generalized Linear Mixed Models (GLMMs).
+We need a wrapper function that generates data sets with different simulation
+parameters (different sample sizes and either Type 1 or Type 2 simulations),
+analyzes the data sets and stores the result. This function will run until
+a pre-specified aim of *converged* models. (Note that models may not always 
+converge, which is especially frequent when sample sizes are small).
 
-This is what we did for the original data. The results of this reanalysis
-are shown in "Appendix_B_reanalysis_original.html".
-Here we use the effect size obtained from that re-analysis to run a BFDA.
-
-
-Effect size estimate
---------------------
-
-Although the effect comes out as robust in our re-analysis, the effect size is
-small.
-The interaction effect of interest, that is, the odds of making an error if 
-effector and word type are the same (performing arm movements and memorizing arm
-words or performing leg movements and memorizing leg words),
-as opposed to when the two differ, are
-$e ^ {`r round(fixef(bfm_binom)[4], 2)`} =`r round(exp(fixef(bfm_binom)[4]), 2)`$.
-This is the *interference effect* of interest!
-
-**An effect of `r round(fixef(bfm_binom)[4], 2)` log-odds is *very* small**.
-For orientation, a common rule of thumb to interpret effect sizes in log-odds is
-as follows (see Chen et al., 2010):
-
-- Small effect  = 0.52 log-odds (= 1.68 OR)
-- Medium effect = 1.24 log-odds (= 3.47 OR)
-- Large effect  = 1.90 log-odds (= 6.71 OR)
-
-This contrasts with the effect size reported by SP13 (Cohen's $d = 1.25$), which
-was substantially larger than "large" (Cohen, 1988).
-
-
-BFDA with effect size as estimated from our improved re-analysis of the data
---------------------------------------
-
-If we take the output from our improved binomial GLMM re-analysis of the data as
-the prior for the BFDA, the estimated sample size we would need is huge, as 
-shown next.
-
-
-### Simulate hypothetical studies
-
-In this simulation,
-
-- We simulate a sequential design with minN = 100, maxN = 3000 and a step
-size of 100 participants.
-- We use as the effect size estimate (passed to the `expected.ES` argument)
-the posterior draw for the interaction effect from the Bayesian GLMM model;
-- We use a default (non-informative) prior as the analysis prior;
-- We run a AB-test (instead of a t-test), which is the appropriate test for
-effects measured on a (log-)odds ratio scale.
-
-
-Simulate data under H1 and H0 and save to disk.
+Note again that it doesn't generate output to the console. Instead it writes the 
+results to file (because it calls `sim_many()` and that is what `sim_many()`
+does, see above).
 
 ```{r}
-# # Under alternative hypothesis H1 (~2.7h)
-# sim_H1_origES_defPrior <- BFDA.sim(
-#   expected.ES = beta_post,  # posterior of original becomes prior
-#   type = "abtest",
-#   prior=list("normal", list(prior.mean = 0, prior.variance = 1)),
-#   options.sample = list(effecttype = "logOR"),
-#   n.min=100, n.max=3000, stepsize = 100, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H1_origES_defPrior, "data/sim_H1_origES_defPrior.rds")
-# 
-# # Under null hypothesis H0 (~2.5h)
-# sim_H0_origES_defPrior <- BFDA.sim(
-#   expected.ES = 0,  # no effect
-#   type = "abtest",
-#   prior=list("normal", list(prior.mean = 0, prior.variance = 1)),
-#   options.sample = list(effecttype = "logOR"),
-#   n.min=100, n.max=3000, stepsize = 100, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H0_origES_defPrior, "data/sim_H0_origES_defPrior.rds")
+# Function checks how many converged simulations there are and runs new
+# ones until aim is reached. Note the function is parallelized to run faster.
+run_till_aim <- function(
+  aim,  # the number of converged models we want for each sample size (type1/2)
+  sample_sizes = c(15, 60, 108),
+  nb_cores = parallel::detectCores(),  # Number of cores used in parallelization
+  ...
+  ) {
+  tictoc::tic()  # start counter
+  sims <- sim_till_aim(aim, ...)  # nb of simulations left
+
+  # 1st case: no simulations have been run, in which case sims is FALSE
+  if (is.logical(sims)) {
+    # so then run we'll run one of each sample size to get started
+    print("Create file and run one type1 and type2 sim for each sample size")
+    params <- tibble(
+      Nsubj = rep(sample_sizes, each = 2),
+      sim_type = rep(c("type2", "type1"), length.out = 2 * length(sample_sizes))
+      )
+    # include col names 1st time
+    params$incl_col_names <- c(TRUE, rep(FALSE, nrow(params) - 1))
+    params$rseed <- sample.int(10 ^ 9, size = nrow(params))  # random seeds
+    params$sim_id <- seq_len(nrow(params))
+    print("We'll now run:")
+    print(params)
+    # We can't parellize it yet, bc we want column names to be in row 1:
+    purrr::pmap(
+      .l = params,
+      .f = sim_many,
+      # fixed simulation parameters (for clarity, comment out those passed in params)
+      # Nsubj =,
+      Nitem = 104,
+      fixef_means = fixef_means,
+      fixef_sigma = fixef_sigma,
+      ranef_sigma_subj = ranef_sigma_subj,
+      ranef_sigma_item = ranef_sigma_item
+    )
+
+    } else {  # So there is already a file...
+      # Check if we have attained the aim
+      if (sum(sims$nsims) == 0) {
+        return("Done, my friend!!!")
+      }
+      # There are simulations but we haven't reached the aim.
+      # Print how many simulations will be run:
+      print("We'll now run:")
+      print(sims)
+      # set up parameters
+      params <- tibble(
+        rseed = sample.int(10 ^ 9, size = sum(sims$nsims)),
+        Nsubj = rep(sims$Nsubj, sims$nsims),
+        sim_type = rep(sims$sim_type, sims$nsims),
+        incl_col_names = FALSE
+      )
+      params$sim_id <- seq_len(nrow(params))
+
+      # Now we can parallelize!
+      registerDoParallel(nb_cores)  # use multicore, by default uses all available
+      foreach (
+        i = 1:nrow(params),
+        .packages = c("tidyverse", "broom", "lme4", "mvtnorm", "boot", "tictoc"),
+        .export = c(
+          "sim_many", "simulate_binom", "analyze_simulation", "fixef_means",
+          "fixef_sigma", "ranef_sigma_subj", "ranef_sigma_item"
+          )
+        ) %dopar% {
+          purrr::pmap(
+            .l = params[i,],
+            .f = sim_many,
+            # fixed simulation parameters (for clarity, comment out those passed in params)
+            # Nsubj =,
+            Nitem = 104,
+            fixef_means = fixef_means,
+            fixef_sigma = fixef_sigma,
+            ranef_sigma_subj = ranef_sigma_subj,
+            ranef_sigma_item = ranef_sigma_item
+          )
+        }
+      }
+  tictoc::toc()  # stop counter
+  # recursively runs itself until aim is reached
+  run_till_aim(aim, ...)
+}
 ```
 
-Load from disk
+
+Run the simulations (generate and analyze data sets)
+-----------------------------------------------
+
+The following code will run the simulations until there are as many converged
+simulations of each type as specified in the `aim` argument.
+Note that running 1000 simulations could take several days on a normal computer.
+Running 10 000 as we did is only recommended on a computer cluster.
+
+```{r, message=FALSE}
+# sim_till_aim(aim = 1)  # Outputs FALSE if there isn't any file on disk yet
+# run_till_aim(aim = 1)
+```
+
+
+Basic descriptors of simulations and processing
+==========================================
+
+Load simulations from disk and split into two data frames
+--------------------------
+
+Once the simulations have run, we load results from disk:
+
+```{r, message = FALSE}
+# This is the file that keeps stacking the result of simulations:
+# mysims <- read_csv("data/power_simulation_results_append.csv")
+# But we can also load previously run results:
+# 1) Lite version with 5% of the final simulations (randomly chosen)
+mysims <- read_csv("data/power_simulation_results_append_lite.csv")
+# 2) The full set of simulations: this is quite big and takes time to even load:
+# mysims <- read_csv("data/power_simulation_results_append_final_10k.csv")
+# Rearrange columns for convenience:
+mysims <- mysims %>%
+  select(sim_id : Nsubj, t_ellapsed, term : conv_null)
+head(mysims, 3) %>% kable(digits = 2)
+```
+
+
+The data frame loaded above contains a lot of information about the model
+fitting (it consists of `r nrow(mysims)` rows).
+Mainly it consists of two sets of output:
+
+1) The BIC of the models and the corresponding Bayes factor (BF_BIC):
 
 ```{r}
-# Load from disk
-sim_H1_origES_defPrior <- read_rds("data/sim_H1_origES_defPrior.rds")
-sim_H1_origES_defPrior
-
-sim_H0_origES_defPrior <- read_rds("data/sim_H0_origES_defPrior.rds")
-sim_H0_origES_defPrior
+sims_BIC <- mysims %>%
+  select(sim_id : t_ellapsed, BIC_full : conv_null) %>%
+  unique() %>%
+  mutate(
+    converged = is.na(conv_full) & is.na(conv_null)
+    )
+sims_BIC %>% head(3) %>% kable(digits = 2)
 ```
 
-### Under H1
-
-
-```{r, warning=FALSE}
-results_sim(sim_H1_origES_defPrior, T)
-```
-
-
-### Under H0
+2) The fixed effect coefficient estimates of each model (in long format):
 
 ```{r}
-results_sim(sim_H0_origES_defPrior)
+sims_coef <- mysims %>%
+  select(sim_id : convergence) %>%
+  unique() %>%
+  mutate(converged = is.na(convergence) | convergence == "")
+sims_coef %>% head(3) %>% kable(digits = 2)
 ```
 
 
-Conclusion
-----------
+Number of simulations and proportion of converged models
+---------------------
 
-This set of simulations indicates that 
-**not even an N as large as 3000 (!) participants would suffice to adhere to the journal's guidelines regarding sample size** 
-to "guarantee data collection until the Bayes factor is at least 6 times in
-favour of the experimental hypothesis over the null hypothesis (or vice versa)."
+Many models failed to converge, especially those with sample sizes of 15.
+We are only interested in simulations in which both full and null model converged.
+What's the percentage of convergence failures?
 
-We therefore opted for a sequential design with a maximum N such that 
-"inconclusive results at this sample size would nevertheless be an important
-message for the field" (*Cortex* guidelines for Registered Reports).
-
-
-
-BFDA based on improved analysis method and small-to-medium effect
-=================================================================
-
-Since adjusting our sample size to the estimates above is unfeasible, we opted
-for a design that would allow us to plan for compelling evidence if the effect
-size was either "medium" (i.e. 1.25 log-odds) or "small-to-medium" (i.e., 0.9
-log-odds).
-As previously, in these simulations we don't commit to any strong prior for the
-Bayes factor analysis.
-
-We follow Chen et al.'s (2010) rules of thumb regarding what counts as "small",
-"medium", and "large" effect sizes measured in log-odds (who in turn derive their
-estimates from Cohen's [1988] guidelines, shown here for reference):
+```{r}
+sims_BIC %>%
+  group_by(Nsubj, sim_type) %>%
+  summarise(run = n(), converged = sum(converged)) %>%
+  mutate(prop_converged = converged / run) %>%
+  kable(digits = 2)
+```
 
 
-```{r, include = TRUE, echo = FALSE}
-ES_chen <- tibble(
-  "Label (Chen et al., 2010)" = c("Small", "Medium", "Large"),
-  odds  = c(1.68, 3.47, 6.71)
+Discard convergence failures
+--------------------------
+
+We keep only the models that converged. In an appendix below we show that this
+choice makes our estimates more *conservative*.
+
+```{r}
+sims_BIC_all <- sims_BIC
+sims_BIC     <- sims_BIC %>% filter(converged == TRUE)
+sims_coef_all <- sims_coef
+sims_coef     <- sims_coef %>% filter(converged == TRUE)
+```
+
+
+
+Simulation results
+===============
+
+
+Bayes factors: actual values
+-------------
+
+Visual summary of results (BFs are shown on log10 scale):
+
+```{r}
+ggplot(sims_BIC, aes(x = factor(Nsubj), y = log10(BF_BIC))) + 
+  geom_boxplot() +
+  geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(. ~ sim_type) +
+  geom_hline(yintercept = log10(6), linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = log10(1/6), linetype = "dashed", colour = "blue") +
+  xlab("Sample size (number of participants)")
+```
+
+In the plot above:
+
+- BFs above the red dashed line ($>6$) lead to accepting the alternative 
+hypothesis (H1);
+- BFs below the blue dashed line ($<\frac{1}{6}$) lead to accepting the null
+hypothesis (H0);
+- BFs between the two lines constitute inconclusive evidence.
+
+
+Below is a numerical summary of the same information:
+
+```{r}
+by(sims_BIC$BF_BIC, with(sims_BIC, list(Nsubj, sim_type)), summary)
+```
+
+
+Bayes factor design analysis: How often will we reach the right decision?
+------------------------------------------------------
+
+Create a figure that summarizes the design analysis. This is the figure used
+in our report.
+
+```{r}
+plot_sims <- function(type, df = sims_BIC) {
+  d <- sims_BIC %>%
+    filter(sim_type == type, Nsubj %in% c(15, 60, 108), converged == TRUE) %>%
+    select(rseed : Nsubj, BF_BIC) %>%
+    unique() %>%
+    mutate(BF_decision = ifelse(
+      BF_BIC >= 6, "Accept H1", ifelse(
+        BF_BIC <= 1/6, "Accept H0", "Inconclusive"))
+      ) %>%
+    group_by(Nsubj, BF_decision) %>%
+    summarise(count = n()) %>%
+    mutate(perc = count / sum(count))
+
+  mylevels <- c("Accept H0", "Inconclusive", "Accept H1")
+  mycolours <- c("#00AFBB", "#E7B800", "#FC4E07")
+  
+  # Some values are assigned depending on whether it's type 1 or 2 simulations
+  if (type == "type2") {
+    mytitle <- "Type 2 simulations: H1 is true\n(effect is present)"
+    yinterc <- 0.9
+    } else if (type == "type1") {
+      mytitle <- "Type 1 simulations: H0 is true\n(effect is absent)"
+      yinterc <- 0.05
+      } else {
+        stop("Invalid argument for type!")
+      }
+  d$BF_decision <- factor(d$BF_decision, levels = mylevels)
+  # Plot it
+  p <- ggplot(d, (aes(x = factor(Nsubj), y = perc, fill = BF_decision))) +
+    geom_bar(stat = "identity") +
+    # Don't drop unused levels
+    scale_fill_manual(values = mycolours, drop = FALSE) +
+    geom_hline(yintercept = yinterc, linetype = "dashed") +
+    xlab("Number of participants") +
+    ylab("Proportion") +
+    labs(fill = "Decision") +
+    ggtitle(mytitle) +
+    theme(legend.position = "bottom")
+  p
+}
+```
+
+```{r, fig.width=8}
+p1 <- plot_sims("type1")
+p2 <- plot_sims("type2")
+ggarrange(p1, p2, ncol=2, nrow=1, common.legend = TRUE, legend="right")
+```
+
+Same information in table format:
+
+```{r}
+sims_BIC %>%
+  filter(Nsubj %in% c(15, 60, 108), converged == TRUE) %>%
+  select(rseed : Nsubj, BF_BIC) %>%
+  unique() %>%
+  mutate(BF_decision = ifelse(
+    BF_BIC >= 6, "Accept H1", ifelse(
+      BF_BIC <= 1/6, "Accept H0", "Inconclusive"))
+    ) %>%
+  group_by(sim_type, Nsubj, BF_decision) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = 100 * count / sum(count)) %>%
+  kable(digits = 1)
+```
+
+
+
+Frequentist analysis: Significance of critical coefficients
+-------------------------------------
+
+We can also do a power analysis from the frequentist perspective. To this end,
+we look at the *z*-values for the critical interaction (in the full models which
+have the interaction, of course).
+
+The dashed line marks the conventional threshold for significance in frequentist
+analysis for two-tailed hypotheses (with alpha = .05), namely $z=1.96$.
+
+```{r}
+sims_coef %>%
+  filter(term == "mv_wt") %>%
+  ggplot(aes(x = factor(Nsubj), y = statistic)) + 
+  geom_boxplot() +
+  geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(. ~ sim_type) +
+  geom_hline(yintercept = 1.96, linetype = "dashed") +
+  xlab("Sample size (number of participants)")
+```
+
+
+Summary of decisions taken in a table format. In a frequentist framework we
+either reject the null or fail to reject it.
+Type 1 simulations show us the rate of false positives; Type 2 simulations show
+power:
+
+```{r}
+freq_decis <- expand.grid(
+  H0_decision = c("Reject", "Fail to reject"),
+  sim_type = unique(sims_coef$sim_type)
   ) %>%
-  mutate("log-odds" = log(odds),
-         "Cohen's d" = c(0.2, 0.5, 0.8))
-ES_chen %>% kable(digits = 2)
+  mutate(
+    decision = c("correct", "incorrect", "incorrect", "correct" ),
+    characterization = c("effect detected", "false negative / type 2 error", 
+                      "false positive / type 1 error", "no effect")
+    )
+sims_coef %>%
+  filter(term == "mv_wt") %>%
+  mutate(H0_decision = ifelse(abs(statistic) > 1.96, "Reject", "Fail to reject")) %>%
+  group_by(sim_type, Nsubj, H0_decision) %>%
+  summarise(count = n()) %>%
+  mutate(percentage = 100 * count / sum(count)) %>%
+  left_join(freq_decis) %>%
+  select(sim_type : H0_decision, decision, characterization, count, percentage) %>%
+  arrange(sim_type, Nsubj, decision, characterization) %>%
+  kable(digits = 1)
 ```
 
-We ran two simulations, one setting the effect size to a "medium" effect
-(1.25 log-odds) and one with a "small"-to-"medium" effect size (0.9 log-odds).
+Note that the frequentist power analysis for the *same* data are much more
+lenient. This is particularly noticeable in the power estimates (type 2) for
+sample sizes of 15.
 
 
 
-Simulate hypothetical studies under medium and small-to-medium effect sizes
----------------------------------------------------------------------
+Sanity check: Are we retrieving the correct estimates?
+-----------------------------------------------------
+
+Since we are simulating the data sets, we *know* what the population-level
+effects are, both for fixed and random effecs variance. Are our models correctly
+retrieving them?
+
+Most importantly, the estimates of the population-level effect for the critical
+interaction:
 
 ```{r}
-# # Under alternative hypothesis H1 with medium ES (~20')
-# sim_H1_LO_125_defPrior_steps12 <- BFDA.sim(
-#   expected.ES = 1.25,
-#   type = "abtest",
-#   prior=list("normal", list(prior.mean = 0, prior.variance = 1)),
-#   options.sample = list(effecttype = "logOR"),
-#   n.min=60, n.max=96, stepsize = 12, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H1_LO_125_defPrior_steps12, "data/sim_H1_LO_125_defPrior_steps12.rds")
-# 
-# # Under alternative hypothesis H1 with small-to-medium ES (~20')
-# sim_H1_LO_09_defPrior_steps12 <- BFDA.sim(
-#   expected.ES = 0.9,
-#   type = "abtest",
-#   prior=list("normal", list(prior.mean = 0, prior.variance = 1)),
-#   options.sample = list(effecttype = "logOR"),
-#   n.min=60, n.max=96, stepsize = 12, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H1_LO_09_defPrior_steps12, "data/sim_H1_LO_09_defPrior_steps12.rds")
-# 
-# # Under null hypothesis H0 (~20')
-# sim_H0_defPrior_steps12 <- BFDA.sim(
-#   expected.ES = 0,  # no effect
-#   type = "abtest",
-#   prior=list("normal", list(prior.mean = 0, prior.variance = 1)),
-#   options.sample = list(effecttype = "logOR"),
-#   n.min=60, n.max=96, stepsize = 12, boundary=Inf,
-#   alternative="greater",
-#   B=10000, verbose=TRUE, cores=1)
-# # Save to disk:
-# write_rds(sim_H0_defPrior_steps12, "data/sim_H0_defPrior_steps12.rds")
+mylines <- tibble(sim_type = unique(sims_coef$sim_type), myy = c(fixef_means[4], 0))
+sims_coef %>%
+  filter(term == "mv_wt") %>%
+  ggplot(aes(x = factor(Nsubj), y = estimate)) +
+  geom_boxplot() +
+  geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(. ~ sim_type) +
+  geom_hline(data = mylines, aes(yintercept = myy), colour = "red", linetype = "dashed")
 ```
 
-Load from disk
+
+Estimates of the random by-subject variation for critical effect.
+Note that these tend to be overestimated, especially in the Type 2 simulations.
 
 ```{r}
-# Load from disk
-sim_H1_LO_125_defPrior_steps12 <- read_rds("data/sim_H1_LO_125_defPrior_steps12.rds")
-sim_H1_LO_125_defPrior_steps12
-
-sim_H1_LO_09_defPrior_steps12 <- read_rds("data/sim_H1_LO_09_defPrior_steps12.rds")
-sim_H1_LO_09_defPrior_steps12
-
-sim_H0_defPrior_steps12 <- read_rds("data/sim_H0_defPrior_steps12.rds")
-sim_H0_defPrior_steps12
+sims_coef %>%
+  filter(grepl("sd_mv_wt\\.subject", term)) %>%
+  ggplot(aes(x = factor(Nsubj), y = estimate)) + 
+  geom_boxplot() +
+  geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(. ~ sim_type) +
+  geom_hline(yintercept = sqrt(diag(ranef_sigma_subj)[4]), linetype = "dashed")
 ```
 
-
-Under H1 and medium effect size
--------------------------------
-
-```{r, warning=FALSE}
-results_sim(sim_H1_LO_125_defPrior_steps12, T)
-```
-
-
-Under H1 and small-to-medium effect size
--------------------------------
-
-```{r, warning=FALSE}
-results_sim(sim_H1_LO_09_defPrior_steps12, T)
-```
-
-
-
-Under H0
---------
+Estimates of the random by-subject variation for the intercept:
 
 ```{r}
-results_sim(sim_H0_defPrior_steps12)
+sims_coef %>%
+  filter(grepl("sd_\\(Intercept\\).subject", term)) %>%
+  ggplot(aes(x = factor(Nsubj), y = estimate)) + 
+  geom_boxplot() +
+  geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(. ~ sim_type) +
+  geom_hline(yintercept = sqrt(diag(ranef_sigma_subj)[1]), linetype = "dashed")
 ```
+
+
+
+
 
 
 Conclusion
 ==========
 
-Our proposed design with $N_{min}=60$ and $N_{max}=96$ (step size = 12) and the
+Our proposed design with $N_{min}=60$, $N_{max}=108$ (step size = 12), and the
 evidence threshold set at $BF_{10} > 6$ or $BF_{01} > 6$ will largely suffice to
-guarantee high power (>90%) if the effect was as strong as reported in the
-original study. 
-Taking into account, however, that a) our re-analysis of the original data suggests
-that the effect size might have been severely over-estimated, and b) the
-original ANOVA-based analysis seem inappropriate for the data at hand, we have
-chosen a design that will also guarantee  a high probability of compelling
-evidence using an improved analysis method and with a small-to-medium effect size.
+guarantee high power (>90%) if the effect is as strong as indicated by our
+improved reanalysis of the original data.
+
+
+Appendix: Converged vs non-converged models
+==========================================
+
+We discarded all models that failed to converge or resulted in other model
+fitting problems. Here we show that these models were *more liberal* in accepting
+the H1. In other words, our choice of excluding them makes our results more
+conservative:
+
+
+```{r}
+ggplot(sims_BIC_all, aes(x = converged, y = log10(BF_BIC))) + 
+  geom_boxplot() +
+  # geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(sim_type ~ Nsubj) +
+  geom_hline(yintercept = log10(6), linetype = "dashed", colour = "red") +
+  geom_hline(yintercept = log10(1/6), linetype = "dashed", colour = "blue") +
+  xlab("Sample size (number of participants)")
+```
+
+
+```{r}
+sims_coef_all %>%
+  filter(term == "mv_wt") %>%
+  ggplot(aes(x = converged, y = statistic)) + 
+  geom_boxplot() +
+  # geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(sim_type ~ Nsubj) +
+  geom_hline(yintercept = 2, linetype = "dashed")
+```
+
+
+```{r}
+sims_coef_all %>%
+  filter(term == "mv_wt") %>%
+  ggplot(aes(x = converged, y = estimate)) + 
+  geom_boxplot() +
+  # geom_jitter(height = 0, alpha = myalpha, colour = jitter_colour) +
+  facet_grid(sim_type ~ Nsubj) +
+  geom_hline(yintercept = fixef_means[4], linetype = "dashed", colour = "blue") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  ylab("Estimate")
+```
 
 
 Session info

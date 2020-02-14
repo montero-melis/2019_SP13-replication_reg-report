@@ -18,7 +18,10 @@ This report presents a re-analysis of the original data from the study
 Shebani and Pulvermüller (2013, *Cortex*, hereafter SP13). In the script we:
 
 - Plot and summarize the data to check we obtain the same summaries as in SP13;
-- Replicate the same ANOVAs reported in the original;
+- Replicate the same ANOVAs reported in the original; we emphasize that an
+**ANOVA analysis is inappropriate for this type of error count data** and that it
+may lead to over-estimation of the effect size (see our manuscript and Jaeger,
+2008).
 - Try to figure out how SP13 arrived at the effect size measure they report;
 - Re-analyze the data with more appropriate statistical methods.
 
@@ -91,7 +94,7 @@ d <- d_allconds %>% filter(movement %in% c("arm_paradi", "leg_paradi"))
 
 Plot the data:
 
-```{r}
+```{r, echo = FALSE}
 ggplot(d, aes(x = word_type, y = errors, colour = word_type)) +
   geom_boxplot() +
   facet_grid(. ~ movement)
@@ -102,7 +105,7 @@ variability is large, a hypothetical effect may still be detected if there is
 sufficient consistency within subjects, as it is a within-subjects design. This
 can be better appreciated in the following plot:
 
-```{r, include = TRUE}
+```{r, include = TRUE, echo = FALSE}
 # basic plot
 plot_orig <- d %>%
   mutate(sbj_wtype = paste(subject, word_type, sep = "_")) %>%
@@ -121,7 +124,7 @@ plot_orig <- d %>%
         legend.position="top")
 ```
 
-```{r, echo = TRUE}
+```{r, echo = FALSE}
 # Plot for report
 plot_orig +
   geom_jitter(height = 0, width = .05, alpha = .5) +
@@ -136,7 +139,7 @@ consistency by subjects, i.e. the slopes of the thin lines mostly go in the same
 direction as the slope of the thicker lines.
 
 
-```{r, include=TRUE}
+```{r, include=FALSE}
 # Create a png version to add in the paper:
 if(! dir.exists("myfigures")) dir.create("myfigures")
 ggsave("myfigures/fig_original_results.png",
@@ -145,7 +148,41 @@ ggsave("myfigures/fig_original_results.png",
 ```
 
 
-Replicate originally reported analysis with ANOVAs
+Or we can directly look at the interaction effect by comparing errors in 
+matching conditions (when effector and semantic content are the same, i.e.
+arm-arm, leg-leg) and mismatching conditions (ffector and semantic content are
+different, e.g. arm-leg, leg-arm):
+
+
+```{r}
+d$eff_word <- ifelse(substr(d$movement,1,3) == d$word_type, "match", "mismatch")
+kable(head(d, 4))
+d_interact <- d %>% 
+  group_by(subject, eff_word) %>%
+  summarise(errors = mean(errors))
+kable(head(d_interact, 2))
+```
+
+We can now plot this by-subject interaction effect:
+
+```{r, echo = FALSE}
+ggplot(d_interact, aes(x = eff_word, y = errors)) +
+  geom_jitter(height = 0, width = .05, alpha = .5) +
+  geom_line(aes(group = subject), alpha = .5) +
+  stat_summary(fun.y = mean, geom = "point", size = 4,
+               position = position_dodge(width = .25)) +
+  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.2, size = 2,
+               position = position_dodge(width = .25)) +
+  xlab("Effector-Word type") +
+  ggtitle("Interference effect")
+```
+
+
+Lines show individual participants. Downward slopes indicate that a participant
+numerically showed the interference effect.
+
+
+Replicate originally reported analysis with ANOVAs (statistically inappropriate analysis)
 ==================================================
 
 
@@ -158,12 +195,13 @@ SP13 (p.226):
 d_allconds %>%
   group_by(movement, word_type) %>%
   summarise(
-    M  = round(mean(errors), 1),
-    SD = round(sd(errors), 2)
-  )
+    M  = mean(errors),
+    SD = sd(errors)
+    ) %>%
+  kable(digits = 2)
 ```
 
-Yes, this replicates the values in Table 2!
+Yes, this replicates the values in Table 2 of SP13!
 
 
 ## Anova on full 4 (conditions) x 2 (word categories) design:
@@ -181,7 +219,7 @@ summary(aov_orig_allconds)
 ```
 
 Yes, pretty much: The *F*- and *p*-values are identical. What differs are the
-MSE and I am not sure how they were computed.
+MSE and I am not sure how they were computed in SP13.
 
 
 
@@ -198,9 +236,8 @@ aov_orig <- aov(
 summary(aov_orig)
 ```
 
-Again, pretty much yes: The *F*-values, degrees of freedom and *p*-values are
-identical. Still their reported MSE differs from what we obtained above.
-
+Yes: The *F*-values, degrees of freedom and *p*-values are identical.
+(As before, however, their reported MSE differs from what we obtain.)
 
 
 ## Effect size: Where does the originally reported Cohen's $d$ come from?
@@ -216,29 +253,8 @@ Below we try to reproduce it.
 ### Does the *d* value come from a t-test?
 
 What if we compare the average difference scores corresponding to the 
-interaction effect, i.e. we compare for each subject the average number of
-errors when effector and word type coincide (arm-arm or leg-leg) and when they
-differ (arm-leg or leg-arm):
-
-```{r}
-d$eff_word <- ifelse(substr(d$movement,1,3) == d$word_type, "match", "mismatch")
-head(d, 4)
-d_interact <- d %>% 
-  group_by(subject, eff_word) %>%
-  summarise(errors = mean(errors))
-head(d_interact)
-```
-
-```{r}
-ggplot(d_interact, aes(x = eff_word, y = errors)) +
-  geom_jitter(height = 0, width = .05, alpha = .5) +
-  geom_line(aes(group = subject), alpha = .5) +
-  stat_summary(fun.y = mean, geom = "point", size = 4,
-               position = position_dodge(width = .25)) +
-  stat_summary(fun.data = mean_cl_boot, geom = "errorbar", width = 0.2, size = 2,
-               position = position_dodge(width = .25)) +
-  xlab("Effector-Word type")
-```
+interaction effect, i.e. we run a t-test on the interaction effect we plotted
+above (match vs mismatch):
 
 ```{r}
 d_4ttest <- spread(d_interact, eff_word, errors)
@@ -246,13 +262,16 @@ head(d_4ttest, 3)
 with(d_4ttest, t.test(match, mismatch, paired = TRUE))
 ```
 
+The t-test comes out significant (but bear in mind that it is not the
+appropriate analysis, see below). We can compute Cohen's $d$ for this test.
+
 Cohen's $d$:
 
 ```{r}
 # Following https://rcompanion.org/handbook/I_04.html
 with(d_4ttest, (mean(match) - mean(mismatch)) / sd(match - mismatch))
-# Note we get the same value using the lsr package
-with(d_4ttest, lsr::cohensD(mismatch, match, method = "paired"))
+# Note we get the same value using the lsr package:
+# with(d_4ttest, lsr::cohensD(mismatch, match, method = "paired"))
 ```
 
 ```{r, include=FALSE}
@@ -264,10 +283,10 @@ No; we obtain a Cohen's $d = `r d_09`$, unlike the figure reported in SP13.
 
 ### Computing $d$ from (partial) $\eta^2$?
 
-Eta squared ($\eta^2$) is the most commonly used measure of effect size for ANOVAs: It 
-"measures the proportion of the total variance in a dependent variable that is
-associated with [...] an independent variable" (Richardson, 2011, p. 135;
-for an example calculation, see 
+Eta squared ($\eta^2$) is the most commonly used measure of effect size for
+ANOVAs: It "measures the proportion of the total variance in a dependent
+variable that is associated with [...] an independent variable" (Richardson,
+2011, p. 135; for an example calculation, see 
 [here](https://psychohawks.wordpress.com/2010/10/31/effect-size-for-analysis-of-variables-anova/)).
 
 ```{r}
@@ -310,9 +329,9 @@ Conclusion
 ----------
 
 While we are able to replicate the descriptive statistics and the ANOVA results
-reported in SP13 from the data the authors shared with us, we are unable to
+reported in SP13 from the data the authors have shared, we are unable to
 reproduce their reported effect size value of Cohen's $d = 1.25$ (SP13, p. 226).
-The two methods we have tried yield either $d=`r d_09`$ or $d=0.41$.
+The two methods we have tried yield either $d=`r d_09`$, $d=0.41$, or $d=1.92$.
 
 
 Treat data as coming from a binomial distribution, but what is $n$?
@@ -328,8 +347,11 @@ Here, $n$ is the upper bound on the possible number of errors and $p$ is the
 probability of making an error for each word.
 We will assume that the maximum number of errors for each trial (i.e., sequence
 of 4 words) is 4.
-However, we also need to determine how many trials there were per cell and this
-is slightly tricky, because SP13 report this inconsistently (see below).
+We also assume that the probability of making an error was the same
+for all words (we have to do this in our re-analysis as the shared data are
+aggregated across items).
+Crucially, we also need to determine how many trials there were per cell and
+this turns out to be tricky, because SP13 report this inconsistently (see below).
 
 We emailed the original authors about this. Here is the relevant extract, with 
 the authors' responses as inline comments (email correspondence with Z. Shebani
@@ -384,7 +406,7 @@ d$n <- 48
 
 
 
-Bayesian GLMM (binomial mixed model) with *brms*
+Bayesian binomial mixed model with *brms* (appropriate re-analysis)
 ========================================
 
 We fit a binomial model using the same priors as we are going to use in our
@@ -395,22 +417,20 @@ $N(0,\sigma^2 = 4)$;
 - `brms`'s default priors for the variance components (random effects).
 
 
-Fit the model
--------------
+Preparations
+-----------
 
 First, set coding scheme to contrast coding:
 
 ```{r}
-# movement condition
-d$movement <- factor(d$movement)
-contrasts(d$movement) <- contr.sum(2)
-colnames(contrasts(d$movement)) <- "arm_vs_leg"
-contrasts(d$movement)
-# word type
-d$word_type <- factor(d$word_type)
-contrasts(d$word_type) <- contr.sum(2)
-colnames(contrasts(d$word_type)) <- "arm_vs_leg"
-contrasts(d$word_type)
+# We use numeric coding for consistency with the simulations in Appendix C.
+# (Numeric coding allows to remove correlation terms in random effects.)
+d$mv <- scale(as.numeric(factor(d$movement)), scale = FALSE) * -2
+d$wt <- scale(as.numeric(factor(d$word_type)), scale = FALSE) * -2
+d$mv_wt <- d$mv * d$wt
+# Note that this coding exactly replicates contrast coding obtained with
+# contr.sum(2) on a factor (arm levels = 1, leg levels = -1):
+kable(head(d, 4))
 ```
 
 
@@ -418,7 +438,7 @@ See which priors can be specified for this model and what defaults there are?
 
 ```{r}
 get_prior(
-  errors | trials(n) ~ 1 + movement * word_type + (1 | subject),
+  errors | trials(n) ~ 1 + mv * wt + (1 + mv * wt | subject),
   data = d,
   family = "binomial"
   )
@@ -436,134 +456,124 @@ myprior <- set_prior("normal(0, 2)", class = "b")
 ```
 
 
-Fit two models, one is the actual full model of interest, the other is identical,
-except that it does not contain the interaction between Movement and Word type:
+Fit the models
+-------------
+
+The following function fit pairs of models. One is the *full* model: it contains
+the population-level interaction effect of interest (movement-by-word type).
+The other is the *null* model: it is in all respects identical to the full, 
+except that it does not contain the population-level critical interaction.
+
+(NB: The function takes the formula of the full model as input.)
 
 ```{r}
-# # with interaction
-# bfm_binom <- brm(
-#   errors | trials(n) ~ 1 + movement * word_type + (1 | subject),
-#   data = d,
-#   prior = myprior,
-#   family = "binomial",
-#   iter = 10000, warmup = 1000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
-#   save_all_pars = TRUE  # necessary for brms::bayes_factor() later
+# Function to fit brms full and null models given a formula and save them to
+# disk with appropriate name defined by RE (string argument):
+fit_brm <- function(formu_str, RE, df = d) {
+  f <- as.formula(formu_str)
+  full <- brm(formula = f, data = df, prior = myprior, family = "binomial",
+              iter = 15000, warmup = 2000, chains = 4, save_all_pars = TRUE)
+  null <- update(full, ~ . -mv_wt, save_all_pars = TRUE)
+  BF <- brms::bayes_factor(full, null)
+  l <- list(full, null, BF)
+  saveRDS(l, paste("data/sp13_bfm_", RE, ".rds", sep = ""))
+  l
+}
+```
+
+
+Fit and save:
+
+```{r}
+# # Fit maximal RE models (in the spirit of Barr et al., 2013)
+# bfm_max <- fit_brm(
+#   formu_str = "errors | trials(n) ~ 1 + mv + wt + mv_wt + (1 + mv + wt + mv_wt | subject)",
+#   RE = "max"
 #   )
-# saveRDS(bfm_binom, "data/bayes_glmm_normprior_interact.rds")
-# 
-# # without interaction
-# bfm_binom_nointeract <- update(
-#   bfm_binom, formula = ~ . -movement : word_type  # Same but without the interaction term
-#   )  
-# saveRDS(bfm_binom_nointeract, "data/bayes_glmm_normprior_nointeract.rds")
 ```
 
+Load from disk (once it has been run):
 
 ```{r}
-# Once fit and saved, we can load models from disk:
-bfm_binom <- readRDS("data/bayes_glmm_normprior_interact.rds")
-bfm_binom_nointeract <- readRDS("data/bayes_glmm_normprior_nointeract.rds")
+bfm_max <- readRDS("data/sp13_bfm_max.rds")
+# It's a list with three objects: the full model, the null model, and the BF
+# for the interaction based on bridge sampling. Store the full model separately:
+bfm_full <- bfm_max[[1]]
 ```
-
-```{r}
-# Sanity check - verify priors:
-prior_summary(bfm_binom)
-```
-
 
 
 Summary and interpretation of the full model
 ------------------------------
 
 ```{r}
-summary(bfm_binom)
+summary(bfm_full)
 ```
 
-Or with a prettier and somewhat simplified layout (note that effects are
-converted from log-odds to simple odds!):
-
-```{r}
-tab_model(bfm_binom)
-```
 
 
 **Interpretation (backtransforming to odds)**:
 
 - The estimated average odds of an error (intercept) is 
-$e ^ {`r round(fixef(bfm_binom)[1, 1], 2)`} = `r round(exp(fixef(bfm_binom)[1, 1]), 2)`$
-(corresponding to a probability of
-`r round(inv.logit(fixef(bfm_binom)[1, 1]), 2)`)
-- Neither the type of movement (`movement`) nor the type of word (`word_type`)
-have a significant effect on the odds of making an error.
-- The critical interaction, however, is significant and tells us that the odds
-of making an error if the effector of the movement *coincides* with the word
-type (as opposed to when the two differ) is
-$e ^ {`r round(fixef(bfm_binom)[4,1], 2)`} =`r round(exp(fixef(bfm_binom)[4,1]), 2)`$.
-In other words, participants were `r round(exp(fixef(bfm_binom)[4,1]), 2)` times
+$e ^ {`r round(fixef(bfm_full)[1, 1], 2)`} = `r round(exp(fixef(bfm_full)[1, 1]), 2)`$
+(corresponding to an average probability of
+`r round(inv.logit(fixef(bfm_full)[1, 1]), 2)` of making an error for any word).
+- Neither the type of movement (`mv`) nor the type of word (`wt`) have a
+significant effect on the odds of making an error.
+- The critical interaction (`mv_wt`), however, is significant (see next point)
+and tells us that the odds of making an error if the effector of the movement 
+*coincides* with the word type (as opposed to when the two differ) is
+$e ^ {`r round(fixef(bfm_full)[4,1], 2)`} =`r round(exp(fixef(bfm_full)[4,1]), 2)`$.
+In other words, participants were `r round(exp(fixef(bfm_full)[4,1]), 2)` times
 more likely to make an error if effector and semantics match than if they mismatch.
 This is the *interference effect* of interest!
-- The *brms* model also features 95% credible intervals for parameter estimates.
+- The *brms* model features 95% credible intervals for parameter estimates.
 The 95% credible interval for the critical interaction is
-$[`r round(fixef(bfm_binom)[4,3], 2)`, `r round(fixef(bfm_binom)[4,4], 2)`]$
-(in log-odds, see the table for CI converted to odds).
-Note that zero is not contained in this interval.
+$[`r round(fixef(bfm_full)[4,3], 2)`, `r round(fixef(bfm_full)[4,4], 2)`]$
+(in log-odds). Note that zero is not contained in this interval: that is why
+the effect can be considered significant.
 
 
 
 Is the effect supported by the data? (Bayes factor)
 -------------------------------
 
-There are different ways to compute Bayes factors. We use the one that is
-recommended in [this](https://rpubs.com/lindeloev/bayes_factors)
+A more stringent way to evaluate the significance of the interaction effect
+is to use Bayes factors (BF). In this case we evaluate two models, the full
+and the null models fitted (and loaded) above.
+
+There are different ways to compute Bayes factors. We used bridge sampling, 
+which is the one recommended in [this](https://rpubs.com/lindeloev/bayes_factors)
 post by Jonas Kristoffer Lindeløv (and also by 
 [Paul Buerkner](https://twitter.com/paulbuerkner/status/963585470482604033?lang=en),
 the developer of `brms`, himself).
-
-
-```{r}
-# To compute the Bayes factor for the interaction being different from zero we
-# run the bayes_factor() function on the models with and without the interaction:
-# # Run and save to disk
-# BF_bfm <- brms::bayes_factor(bfm_binom, bfm_binom_nointeract)
-# saveRDS(BF_bfm, "data/BF_bfm.rds")
-```
+It is also the method to compute BFs that we will use for our own study
 
 ```{r}
+# It's the 3rd element in the list bfm_max
 # Once run, load from disk:
-BF_bfm <- readRDS("data/BF_bfm.rds")
+BF_bfm <- bfm_max[[3]]
 BF_bfm
 ```
 
 
-This BF consists "strong" evidence (BF > 10) in favour of the alternative hypothesis
-that the interaction is not zero.
+This BF constitutes only inconclusive or anecdotical evidence in favour of the
+alternative hypothesis ($H_1$) against the null ($H_0$): $1< BF_{10} < 6$.
 
 
 Posterior densities
 ------------------
 
-`brms` also lets us plot the posterior distribution of the model estimates. We 
-observe that the posterior distribution for the interfefence effect (4th panel
-in left column) is clearly distinct from zero:
+`brms` also lets us plot the posterior distribution of the model estimates. The
+posterior distribution for the interfefence effect is shown in the 4th panel
+of the left column.
 
 ```{r, fig.height=7}
-plot(bfm_binom)
+plot(bfm_full)
 ```
 
 
 
-
-However, the effect size is small
------------
-
-However, while the effect seems to be there, an effect size of
-`r round(fixef(bfm_binom)[4, 1], 2)` log-odds is small. For instance, 
-according to the guidelines proposed by Chen, Cohen, and Chen (2010), an effect
-of 0.5 log-odds would be considered a "small" effect. The current effect being
-less than one third of this could even be considered very small.
-
-
-GLMM with *lme4*
+Sanity check: GLMM with *lme4*
 ================
 
 As a sanity check, we also fit a frequentist version of the GLMM above with the
@@ -574,18 +584,31 @@ We fit an equivalent model to the one above:
 
 ```{r}
 fm_binom <- glmer(
-  cbind(errors, n - errors) ~ 1 + movement * word_type + (1 | subject),
-  data = d, family = "binomial"
+  cbind(errors, n - errors) ~ 1 + mv + wt + mv_wt + (1 + mv + wt + mv_wt | subject),
+  data = d, 
+  family = "binomial"
   )
+```
+
+The `boundary (singular) fit` warning is probably due an overspecified model,
+as we only have four observations per participant but we try to estimate random
+effect slopes for the 2x2 design. The estimates can nevertheless be trusted
+(P. Alday, personal communication, 17 Dec 2019). As shown below, the model
+estimates in the `lme4` are also very similar to those from `brms`, which
+constitutes at least one type of validation since two different methods yield
+very similar results.
+
+```{r}
 summary(fm_binom)
 ```
 
-Indeed the point estimates are almost identical:
+
+The point estimates of the `lme4` and `brms` models are almost identical:
 
 ```{r}
 tibble(
-  Coefficient = rownames(fixef(bfm_binom)),
-  brms = fixef(bfm_binom)[, 1],
+  Coefficient = rownames(fixef(bfm_full)),
+  brms = fixef(bfm_full)[, 1],
   lme4 = fixef(fm_binom)
 ) %>%
   kable(digits = 3)
@@ -596,122 +619,20 @@ comparable. This shows that our results are not specific to using Bayesian
 GLMMs (in `brms`).
 
 
-Is the effect we find in the sample robust? Apply bootstrapping
-============================
+Conclusion
+==========
 
-Markus wondered if the apparently robust interaction effect observed in the
-original data might hinge on just a few participants who are driving the effect. 
-One way of assessing this is through bootstrapping.
+The interference effect is suggested by the evaluation of the critical
+coefficient (movement-by-word type interaction) in the full model.
+The effect size of this interference effect is rather small:
+`r round(fixef(bfm_full)[4, 1], 2)` log-odds. This can be compared to the
+guidelines proposed by Chen, Cohen, and Chen (2010), where an effect of 0.5
+log-odds would be considered a "small" effect. The current effect being
+less than one third of this could even be considered very small.
 
-Bootstrap procedure:
+Importantly, the BF analysis does only yield "anecdotical" or "inconclusive"
+evidence for the existence of the effect.
 
-1. Take a random sample of size 15 with replacement from the 15 participants in
-the original study.
-2. Analyze the data set with the *lme4* model above (faster than *brms*).
-3. Extract the estimates for the coefficient and its SE.
-4. Repeat steps 1--3 a large number of times (e.g., 5000)
-
-
-Bootstrapping
--------------
-
-Basic function:
-
-```{r}
-# Function for a single run:
-mybootstr <- function(df = d) {
-
-  # Create new data set by resampling Subjects with replacement
-  # (NB: Relies on dplyr functions, see in particular nest())
-  newd <- df %>%
-    nest(-subject) %>%
-    sample_n(15, replace = TRUE) %>%
-    mutate(subject = 1 : 15) %>%  # assign each resampled S a unique ID
-    unnest()
-
-  # contrast coding for movement and wordtype
-  newd$movement <- factor(newd$movement)
-  contrasts(newd$movement) <- contr.sum(2)
-  newd$word_type <- factor(newd$word_type)
-  contrasts(newd$word_type) <- contr.sum(2)
-
-  # Fit glmer model
-  fm_binom <- glmer(
-    cbind(errors, n - errors) ~ 1 + movement * word_type + (1 | subject),
-    data = newd, family = "binomial"
-    )
-
-  # extract point estimate and SE for interaction coefficient of interest, based
-  # on https://r.789695.n4.nabble.com/extracting-coefficients-from-lmer-td791247.html
-  beta <- fixef(fm_binom)[4]
-  SE   <- sqrt(diag(vcov(fm_binom, useScale = FALSE))[4])
-  zval <- beta / SE
-  # out
-  out <- c(beta, SE, zval)
-  names(out) <- c("beta", "SE", "zval")
-  out
-}
-```
-
-Call it once or 4 times (with `replicate()`):
-
-```{r}
-# Run once
-mybootstr()
-# Using replicate
-data.frame(t(replicate(4, mybootstr())))
-```
-
-
-Run the function a large number of times and save results:
-
-```{r}
-# # Run and save to disk
-# bootstr_res <- data.frame(t(replicate(5000, mybootstr())))
-# write_csv(bootstr_res, "data/bootstrap_results.csv")
-```
-
-Once run, read from disk:
-
-```{r, message=FALSE}
-# Read from disk
-bootstr_res <- read_csv("data/bootstrap_results.csv")
-# str(bootstr_res)
-head(bootstr_res)
-```
-
-
-Plot results
-------------
-
-We plot the distribution of
-
-1. beta estimates for the coefficient of interest (the critical interaction)
-2. the SE for that coefficient
-3. the $z$-value for that coefficient (this is just the ratio of the two above)
-
-```{r}
-ggplot(bootstr_res, aes(x = beta)) +
-  geom_density() + xlim(0, 0.35)
-ggplot(bootstr_res, aes(x = SE)) +
-  geom_density()
-ggplot(bootstr_res, aes(x = zval)) +
-  geom_density() + xlim(0, 8) +
-  geom_vline(xintercept = 1.96, linetype = "dashed")
-```
-
-
-What is the proportion of runs in which $z < 1.96$ (i.e., a non-significant
-effect)?
-
-```{r}
-with(bootstr_res, sum(zval < 1.96) / length(zval))
-```
-
-Based on bootstrapping it does not seem that the effect is very sensitive to
-a few exceptional participants within the sample. But of course it could still
-be that the sampled data itself (in the experiment) was exceptional, leading
-to a conclusion that would not scale up to the larger population.
 
 
 Session info

@@ -44,8 +44,9 @@ library("moments")
 Model from the re-analysis of original data:
 
 ```{r}
-# Load brms model fitted to original data
-bfm_orig <- readRDS("data/bayes_glmm_normprior_interact.rds")
+# Load brms model fitted to original data. It's a list with three objects: the
+# full model is the first element of that list:
+bfm_orig <- readRDS("data/sp13_bfm_max.rds")[[1]]
 ```
 
 Extract posterior for interaction coefficient to use later as prior for
@@ -54,7 +55,7 @@ replication BF:
 ```{r}
 # Extract posterior estimates for the critical interaction effect from the brms
 # model (pull converts it to a numerical vector):
-beta_posterior <- pull(posterior_samples(bfm_orig, "movementarm_vs_leg:word_typearm_vs_leg"))
+beta_posterior <- pull(posterior_samples(bfm_orig, "b_mv_wt"))
 # check normality
 qqnorm(beta_posterior)
 qqline(beta_posterior,col='red')
@@ -64,7 +65,9 @@ moments::skewness(beta_posterior)
 # length(v) > 5000, and is problematic for other reasons as well. See:
 # https://stats.stackexchange.com/questions/2492/is-normality-testing-essentially-useless
 mean_inter_post <- mean(beta_posterior)
+mean_inter_post
 sd_inter_post   <- sd(beta_posterior)
+sd_inter_post
 ```
 
 
@@ -82,85 +85,67 @@ Set simulation parameters
 
 The arguments we need to pass to `simulate_binom()` specify different parameters
 of the statistical model that generates the data.
-We take those parameters from the original data whenever we can and we make up
-the rest using common sense.
+We take those parameters from the original data for fixed effects and by-subject
+random effects. We use estimates from our pilot data for by-subject intercepts.
 
+The estimates we use are the same as in our power simulations (Appendix C).
 
 ```{r}
-# Fixed effects
-# Vector of coefficient means
+# Fixed (i.e., population-level) effects:
+fixef(bfm_orig)
+
+# Vector of coefficient means for fixed effects
 fixef_means <- fixef(bfm_orig)[, 1]
 fixef_means
-```
 
-
-```{r}
-# Covariance matrix (Sigma); we need to square the SEs to convert them to Variances
-fixef_sigma <- diag(fixef(bfm_orig)[, 2]) ^ 2  # we assume uncorrelated diagonal matrix
+# SEMs for fixed effects. These we take from the covariance matrix (Sigma) of
+# the model. Note we need to square the SEMs to convert them to variances, which
+# is what our simulate_binom() function expects (rather than SD).
+fixef_sigma <- diag(fixef(bfm_orig)[, 2] ^ 2)  # we assume uncorrelated diagonal matrix
 fixef_sigma
-```
 
-
-```{r}
-# For random effects by subject we only have an estimate of the random intercept:
-VarCorr(bfm_orig)
-# We will assume that SDs for the other parameters (random slopes) are
-# proportional to the corresponding fixef SEM in the same way the intercept is:
-prop <- VarCorr(bfm_orig)$subject$sd[1] / fixef(bfm_orig)[1, 2]  # random variability >3 times SEM
-# again assume uncorrelated diagonal matrix:
-ranef_sigma_subj <- diag(fixef(bfm_orig)[, 2] * prop) ^ 2  
+# By-subject random effects for the model:
+VarCorr(bfm_orig)$subject$sd
+# Extract by-subject random SDs and square them to obtain variances:
+ranef_sigma_subj <- diag(VarCorr(bfm_orig)$subject$sd[, 1]) ^ 2
 ranef_sigma_subj
-# However, by-subject variance for random slopes of the critical interaction we
-# set to be somewhat larger, reflecting individual variability for the effect.
-ranef_sigma_subj[4,4] <- 0.2 ^ 2
-ranef_sigma_subj  # variances
-sqrt(ranef_sigma_subj)  # SDs are probably more intuitive to think of
-```
 
-
-```{r}
-# Random effects by item we need to completely make up. We let SD for the intercept
-# and Movement conditions be the same as the corresponding by-subject SDs.
-# assume uncorrelated diagonal matrix:
-ranef_sigma_item <- diag(fixef(bfm_orig)[1:2, 2] * prop) ^ 2  
+# The original data consists of aggregated by-subject data, not trial-level data.
+# To obtain estimates for item-level variability we use our own pilot data (see
+# https://github.com/montero-melis/2018_replication_sheb-pulv2013/blob/master/1806_pilot_analysis/item-variance_estimates.R).
+# The random by-item intercept is SD=0.65. However, we don't have estimates for
+# by-item random slope for movement because we only ran the control condition in
+# the pilot. We will assume the SD for this random slope to be the same as the
+# by-subject SD for the slope of the critical interaction, which is likely to be
+# an overestimate. If so, it will only make our power estimates more conservative:
+ranef_sigma_item <- diag(c(0.65, 0.06)) ^ 2  # square to obtain variances
 ranef_sigma_item
 ```
+
 
 
 Simulate data
 -------------
 
-Simulate data for our $maxN=96$:
+Simulate data for our $N_{max} = 108$:
 
 ```{r, message=FALSE}
 # Simulate data
 set.seed(654198461)  # make data set replicable
-d_list <- simulate_binom(
-  Nsubj = 96,
+d <- simulate_binom(
+  Nsubj = 60,
   Nitem = 104,
   fixef_means = fixef_means,
   fixef_sigma = fixef_sigma,
   ranef_sigma_subj = ranef_sigma_subj,
-  ranef_sigma_item = ranef_sigma_item,
-  full_output = TRUE,
-  print_each_step = FALSE
+  ranef_sigma_item = ranef_sigma_item
 )
 ```
 
 
-The output consists of a list of data frames containing the data as well as
-information about the parameters that generated the data.
+The output is a data frame with the simulated data:
 
 ```{r}
-names(d_list)
-```
-
-
-The 1st element in the list contains the data frame with the simulated data:
-
-```{r}
-# First list contains the actual data set
-d <- d_list[[1]]
 head(d) %>% kable
 ```
 
@@ -176,14 +161,6 @@ d %>% select(subject : Error) %>% head %>% kable
 ```
 
 
-Show the (six first rows of the) other objects in the list:
-
-```{r}
-lapply(d_list[2:7], function(x) x %>% head %>% kable)
-```
-
-
-
 
 Simulate sequential data collection
 -----------------------------------
@@ -193,17 +170,13 @@ Our design is sequential:
 1. Collect data from $minN=60$ participants.
 2. Compute $BF$ for alternative hypothesis (interaction $\neq 0$) vs null hypothesis (interaction $= 0$)
 3. If either $BF_{10} > 6$ or $BF_{01} > 6$, stop data collection and report results. Else:
-4. If $N<96$, collect another batch of 12 participants and go to step 2. Else:
-5. When we reach $N=96$, stop data collection, compute $BF$ and report results.
+4. If $N<108$, collect another batch of 12 participants and go to step 2. Else:
+5. When we reach $N=108$, stop data collection, compute $BF$ and report results.
 
-
-We therefore split the data into batches:
+We would therefore first analyze a data set of 60 participants:
 
 ```{r}
 d_60 <- d %>% filter(subject %in% 1 : 60)
-d_72 <- d %>% filter(subject %in% 1 : 72)
-d_84 <- d %>% filter(subject %in% 1 : 84)
-d_96 <- d %>% filter(subject %in% 1 : 96)
 ```
 
 
@@ -245,54 +218,62 @@ analyse_pipe <- function(
   df$trial_in_exp_z <- scale(df$trial_in_exp)
   df$pos_in_trial_z <- scale(df$pos_in_trial)
   df$preced_error_z <- scale(df$preced_error)
-
+  
+  # Priors:
   # As default, specify weakly informative priors: N(0,sigma^2 = 4) for
   # population-level (fixed) effects
   # NB: In Stan a normal distribution is specified with sigma (*not* sigma^2), see
   # https://mc-stan.org/docs/2_18/functions-reference/normal-distribution.html
   # and
   # https://stackoverflow.com/questions/52893379/stan-in-r-standard-deviation-or-variance-in-normal-distribution
+  formula_full <- as.formula(paste(
+    "Error ~",  # DV
+    "1 + movement * word_type +",  # critical manipulations and interaction
+    "trial_in_exp_z + pos_in_trial_z + preced_error_z +",  # nuisance predictors
+    "(1 + movement * word_type | subject) + (1 + movement | item)"  # maximal random structure
+  ))
+  print(formula_full)
+  print(get_prior(formula_full, df))
+  
+  formula_null <- update(formula_full, ~ . - movement : word_type)
+  print(formula_null)
+  print(get_prior(formula_null, df))
+
   myprior <- set_prior("normal(0, 2)", class = "b")
+  print("myprior:")
   print(myprior)
   # for replication BF, use the posterior of the re-analysis as prior for interaction:
   myprior_repBF <- c(
     myprior,
-    set_prior("normal(0.149, 0.0418)", class = "b",
-              coef = "movementarms_vs_legs:word_typearms_vs_legs")
+    set_prior(
+      paste("normal(", mean_inter_post, ",", sd_inter_post, ")", sep = ""),
+      class = "b",
+      coef = "movementarms_vs_legs:word_typearms_vs_legs"
+      )
     )
+  print("myprior_repBF:")
   print(myprior_repBF)
 
-  # Model *without* interaction
-  # NB: for the replication BF, we need now to remove prior for interaction
-  # (which is not defined in the model):
-  bfm_binom_nointeract <- brm(
-    Error ~
-      1 + movement + word_type +  # critical manipulations but no interaction
-      trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
-      (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
+  # fit null model (without interaction):
+  # NB: The prior for interaction is not defined in the null model:
+  bfm_null <- brm(
+    formula = formula_null,
     data = df,
     prior = myprior,
     family = "bernoulli",
     iter = 15000, warmup = 2000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
     save_all_pars = TRUE  # necessary for brms::bayes_factor() later
   )
-  
-  # fit full model (with interaction):
-  bfm_binom <- brm(
-    Error ~
-      1 + movement * word_type +  # critical manipulations and interaction
-      trial_in_exp_z + pos_in_trial_z + preced_error_z +  # nuisance predictors
-      (1 + movement * word_type | subject) + (1 + movement | item),  # maximal random structure
-    data = df,
+  # Model *without* interaction
+  bfm_full <- update(
+    bfm_null,
+    formula = formula_full,
     prior = if (repBF) { myprior_repBF } else { myprior },
-    family = "bernoulli",
-    iter = 15000, warmup = 2000, chains = 4,  # https://discourse.mc-stan.org/t/bayes-factor-using-brms/4469/3
-    save_all_pars = TRUE  # necessary for brms::bayes_factor() later
-  )
-  
+    )
+
   # pack models and data into a list and give sensible names to each object
-  out <- list(bfm_binom, bfm_binom_nointeract, df)
-  names(out) <- paste(df_name, c("bfm_full", "bfm_nointer", "dataset"), sep = "_")
+  out <- list(bfm_full, bfm_null, df)
+  names(out) <- paste(df_name, c("bfm_full", "bfm_null", "dataset"), sep = "_")
 
   # save list to disk:
   saveRDS(out, file = paste("data/analysis_simulated_", df_name, ".rds", sep =""))
@@ -308,8 +289,8 @@ Fit models
 
 
 ```{r}
-# sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
-sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
+sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
+# sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
 names(sim_d_60)
 ```
 
@@ -336,10 +317,10 @@ Bayes factor
 Compute Bayes factor (or load from disk):
 
 ```{r}
-# # Run and save to disk
-# BF_bfm_d60 <- brms::bayes_factor(
-#   sim_d_60[["d_60_bfm_full"]], sim_d_60[["d_60_bfm_nointer"]]
-#   )
+# Run and save to disk
+BF_bfm_d60 <- brms::bayes_factor(
+  sim_d_60[["d_60_bfm_full"]], sim_d_60[["d_60_bfm_null"]]
+  )
 # saveRDS(BF_bfm_d60, "data/BF_bfm_d60.rds")
 ```
 
@@ -405,7 +386,7 @@ a normal distribution (see "Set up workspace" for this prior).
 ### Fit models with appropriate prior for repBF:
 
 ```{r}
-# sim_d_60_BFrep <- analyse_pipe(d_60, repBF = TRUE)  # takes about  hours
+# sim_d_60_BFrep <- analyse_pipe(d_60, repBF = TRUE)  # takes about 2  hours
 sim_d_60_BFrep <- readRDS("data/analysis_simulated_d_60_repBF.rds")
 names(sim_d_60_BFrep)
 ```

@@ -15,6 +15,8 @@ myfigures/*
 
 # Large data files
 data/analysis_simulated_*
+data/power_simulation_results_append_final_10k.csv
+data/power_simulation_results_append.csv
 
 
 ######################################################

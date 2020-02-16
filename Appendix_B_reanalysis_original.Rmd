@@ -482,7 +482,8 @@ fit_brm <- function(formu_str, RE, df = d) {
 ```
 
 
-Fit and save:
+Fit and save (the following snippet needs to be uncommented and run the first
+time):
 
 ```{r}
 # # Fit maximal RE models (in the spirit of Barr et al., 2013)

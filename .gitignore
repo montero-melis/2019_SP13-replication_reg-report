@@ -17,6 +17,11 @@ myfigures/*
 data/analysis_simulated_*
 data/power_simulation_results_append_final_10k.csv
 data/power_simulation_results_append.csv
+data/sp13_bfm_max.rds
+
+# Following are not very large but they can only be computed with the brms models and they are large
+data/BF_bfm_d60.rds
+data/BFrep_bfm_d60.rds
 
 
 ######################################################

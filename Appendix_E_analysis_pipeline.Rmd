@@ -27,6 +27,15 @@ generated, see the custom function defined in `generate_data_fnc.R`). The data
 is generated with a fixed random seed for reproducibility.
 2. Analyzes the simulated data in the same way we will analyze our actual data.
 
+*NB:*
+
+In our experiment we will collect data from three conditions, the two critical
+conditions (arm movement and leg movement) and the control condition (during
+which participants do not perform any movement). The latter only serves quality
+checks (see manuscript) and will not be part of our critical analysis. We will
+subset the data to only analyze the critical conditions. In our simulations
+below we only simulate these critical conditions.
+
 
 Set up workspace
 ===============
@@ -41,7 +50,7 @@ library("moments")
 ```
 
 
-Model from the re-analysis of original data:
+Load the model fitted to the original data (see re-analysis - Appendix B):
 
 ```{r}
 # Load brms model fitted to original data. It's a list with three objects: the
@@ -87,8 +96,8 @@ The arguments we need to pass to `simulate_binom()` specify different parameters
 of the statistical model that generates the data.
 We take those parameters from the original data for fixed effects and by-subject
 random effects. We use estimates from our pilot data for by-subject intercepts.
-
-The estimates we use are the same as in our power simulations (Appendix C).
+Note that the estimates we use here are the same as in our design analysis /
+power simulations (Appendix C).
 
 ```{r}
 # Fixed (i.e., population-level) effects:
@@ -151,9 +160,8 @@ head(d) %>% kable
 
 This data frame contains columns that decompose each observation into the
 parameters that generated it. These parameters reflect effects at three different
-levels: population-, subject-, and participant-level effects.
-
-In the actual data set we would only observe the actual outcome and would have
+levels: population-, participant-, and item-level effects.
+In the real data set we would only observe the actual outcome and would have
 to infer the rest. So the actual data will look like this:
 
 ```{r}
@@ -167,13 +175,15 @@ Simulate sequential data collection
 
 Our design is sequential:
 
-1. Collect data from $minN=60$ participants.
-2. Compute $BF$ for alternative hypothesis (interaction $\neq 0$) vs null hypothesis (interaction $= 0$)
-3. If either $BF_{10} > 6$ or $BF_{01} > 6$, stop data collection and report results. Else:
+1. Collect data from $N_{min}=60$ participants.
+2. Compute standard $BF$ (weakly informative prior) for alternative hypothesis
+   (interaction $\neq 0$) vs null hypothesis (interaction $= 0$).
+3. If either $BF_{10} > 6$ or $BF_{01} > 6$, stop data collection and report
+   results. Else:
 4. If $N<108$, collect another batch of 12 participants and go to step 2. Else:
 5. When we reach $N=108$, stop data collection, compute $BF$ and report results.
 
-We would therefore first analyze a data set of 60 participants:
+We therefore first analyze a data set of $N_{min}=60$ participants:
 
 ```{r}
 d_60 <- d %>% filter(subject %in% 1 : 60)
@@ -184,7 +194,7 @@ Analyze and plot data (analysis pipeline)
 =====================
 
 We show the data analysis pipeline for a data set corresponding to a sample
-size of $N=60$. If the Bayes factor was below hour pre-determined evidence
+size of $N=60$. If the Bayes factor was below our pre-determined evidence
 threshold ($\frac{1}{6} < BF_{10} < 6$), then we would collect an additional
 batch of 12 participants and repeat the same analysis.
 
@@ -219,13 +229,7 @@ analyse_pipe <- function(
   df$pos_in_trial_z <- scale(df$pos_in_trial)
   df$preced_error_z <- scale(df$preced_error)
   
-  # Priors:
-  # As default, specify weakly informative priors: N(0,sigma^2 = 4) for
-  # population-level (fixed) effects
-  # NB: In Stan a normal distribution is specified with sigma (*not* sigma^2), see
-  # https://mc-stan.org/docs/2_18/functions-reference/normal-distribution.html
-  # and
-  # https://stackoverflow.com/questions/52893379/stan-in-r-standard-deviation-or-variance-in-normal-distribution
+  # Formula of the full model:
   formula_full <- as.formula(paste(
     "Error ~",  # DV
     "1 + movement * word_type +",  # critical manipulations and interaction
@@ -233,12 +237,21 @@ analyse_pipe <- function(
     "(1 + movement * word_type | subject) + (1 + movement | item)"  # maximal random structure
   ))
   print(formula_full)
-  print(get_prior(formula_full, df))
-  
+  # Formula of the null model (remove the population-level interaction)
   formula_null <- update(formula_full, ~ . - movement : word_type)
   print(formula_null)
+  
+  # Priors:
+  # As default, specify weakly informative priors: N(0,sigma^2 = 4) for
+  # population-level (fixed) effects
+  # NB: In Stan a normal distribution is specified with sigma (*not* sigma^2), see
+  # https://mc-stan.org/docs/2_18/functions-reference/normal-distribution.html
+  # and
+  # https://stackoverflow.com/questions/52893379/stan-in-r-standard-deviation-or-variance-in-normal-distribution
+  # Print to screen the priors that can be specified for full and null models:
+  print(get_prior(formula_full, df))
   print(get_prior(formula_null, df))
-
+  # Set weakly informative priors
   myprior <- set_prior("normal(0, 2)", class = "b")
   print("myprior:")
   print(myprior)
@@ -284,20 +297,24 @@ analyse_pipe <- function(
 
 
 
-Fit models
-----------
+Fit model with weakly informative priors
+----------------------------
 
+Fit full and null models the first time and load them from disk later
+(comment/uncomment accordingly):
 
 ```{r}
-sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
-# sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
+# sim_d_60 <- analyse_pipe(d_60)  # takes about 2.5 hours
+sim_d_60 <- readRDS("data/analysis_simulated_d_60.rds")
 names(sim_d_60)
 ```
 
-Summary of priors:
+
+Summary of priors (sanity check):
 
 ```{r}
-prior_summary(sim_d_60[[1]])
+prior_summary(sim_d_60[[1]])  # full model
+prior_summary(sim_d_60[[2]])  # null model
 ```
 
 
@@ -311,27 +328,25 @@ summary(sim_d_60[[1]])
 ```
 
 
-Bayes factor
-------------
+Standard Bayes factor for H1 (full model) vs H0 (null model)
+--------------------------
 
-Compute Bayes factor (or load from disk):
+Compute Bayes factor (or load from disk if run before):
 
 ```{r}
-# Run and save to disk
-BF_bfm_d60 <- brms::bayes_factor(
-  sim_d_60[["d_60_bfm_full"]], sim_d_60[["d_60_bfm_null"]]
-  )
+# # Run and save to disk
+# BF_bfm_d60 <- brms::bayes_factor(
+#   sim_d_60[["d_60_bfm_full"]], sim_d_60[["d_60_bfm_null"]]
+#   )
 # saveRDS(BF_bfm_d60, "data/BF_bfm_d60.rds")
-```
 
-```{r}
 # Once run, read from disk
 BF_bfm_d60 <- readRDS("data/BF_bfm_d60.rds")
 ```
 
 
-Actual Bayes factor comparing $H_1$ (the critical interaction is not zero) to 
-$H_0$ (the critical interaction is zero):
+Standard Bayes factor comparing $H_1$ (the critical interaction is not zero) to 
+$H_0$ (the critical interaction is zero), based on weakly informative prior:
 
 ```{r}
 BF_bfm_d60
@@ -346,7 +361,7 @@ Plot all population-level estimates. Inner boxes show 50%, outer error bars 95%
 credible intervals (see detailed 
 [plot explanation here](https://strengejacke.github.io/sjPlot/articles/plot_model_estimates.html#bayesian-models-fitted-with-stan)): 
 
-```{r}
+```{r sjplot_model}
 sjPlot::plot_model(
   sim_d_60[[1]], transform = NULL, prob.outer = .95, sort.est = TRUE,
   vline.color = "gray", title = "Log-odds of error",
@@ -374,16 +389,22 @@ plot(marginal_effects(sim_d_60[[1]], effects = "movement:word_type"),
 Replication Bayes factor (after Verhagen and Wagenmakers, 2014)
 ---------------------------------------------------------------
 
-If the standard BF is above the pre-determined evidence threshold *or* 
-if we have reached $maxN=96$,
-then we also compute the replication Bayes factor (Verhagen and Wagenmakers, 2014).
+If the standard BF (here above) is greater than the pre-determined evidence
+threshold or if we have reached $N_{max}=96$, then we also compute the replication
+Bayes factor $BF_{rep}$ (Verhagen and Wagenmakers, 2014).
+Since in this simulated data set our standard 
+$BF = `r round(BF_bfm_d60$bf)` \geq 6$, we do compute the $BF_{rep}$.
 
-For the replication BF we use as the prior for the interaction the posterior
+For $BF_{rep}$ we use as the prior for the interaction coefficient the posterior
 distribution from the model fitted to the original data. We specify this as
-a normal distribution (see "Set up workspace" for this prior).
+a normal distribution (see "Set up workspace" for this prior and 
+"Function for data analysis" for the actual fitting).
 
 
 ### Fit models with appropriate prior for repBF:
+
+Fit full and null models the first time and load them from disk later
+(comment/uncomment accordingly):
 
 ```{r}
 # sim_d_60_BFrep <- analyse_pipe(d_60, repBF = TRUE)  # takes about 2  hours
@@ -391,24 +412,26 @@ sim_d_60_BFrep <- readRDS("data/analysis_simulated_d_60_repBF.rds")
 names(sim_d_60_BFrep)
 ```
 
+### Check priors and model summary
+
 Summary of priors:
 
 ```{r}
-prior_summary(sim_d_60_BFrep[[1]])
-prior_summary(sim_d_60_BFrep[[2]])
+prior_summary(sim_d_60_BFrep[[1]])  # full model
+prior_summary(sim_d_60_BFrep[[2]])  # null model
 ```
 
 Model summary (full model with interaction)
 
 ```{r}
 summary(sim_d_60_BFrep[[1]])
-# summary(sim_d_60_BFrep[[2]])
 ```
 
 
-### Replication BF
 
-Replication Bayes factor:
+### Replication BF ($BF_{rep}$)
+
+Compute replication Bayes factor (or load from disk if run before):
 
 ```{r}
 # # Run and save to disk
@@ -416,45 +439,19 @@ Replication Bayes factor:
 #   sim_d_60_BFrep[[1]], sim_d_60_BFrep[[2]]
 #   )
 # saveRDS(BFrep_bfm_d60, "data/BFrep_bfm_d60.rds")
-```
 
-```{r}
 # Once run, read from disk
 BFrep_bfm_d60 <- readRDS("data/BFrep_bfm_d60.rds")
 ```
 
-Actual $BF_{rep}$:
+$BF_{rep}$:
 
 ```{r}
 BFrep_bfm_d60
 ```
 
-### Plots
-
-```{r}
-sjPlot::plot_model(
-  sim_d_60_BFrep[[1]], transform = NULL, prob.outer = .95, sort.est = TRUE,
-  vline.color = "gray", title = "Log-odds of error",
-  axis.labels = c(  # Careful: indep of sort.est, the order is simply specified bottom to top!
-    "word type (arm- vs leg-related)",
-    "movement condition (arms vs legs)",
-    "preceding error in trial",
-    "word position in trial",
-    "trial in experiment",
-    "movement-by-word type interaction"
-    )
-  ) +
-  theme_classic()
-```
-
-
-Plot the interaction effect:
-
-```{r}
-plot(marginal_effects(sim_d_60_BFrep[[1]], effects = "movement:word_type"),
-     theme = theme_classic())
-```
-
+The replication BF is 
+$BF_{rep} = `r round(BFrep_bfm_d60$bf)` \geq 6$.
 
 
 

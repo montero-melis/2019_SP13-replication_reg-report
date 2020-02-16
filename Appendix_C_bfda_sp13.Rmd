@@ -115,7 +115,7 @@ library("doParallel")  # to parallelize simulations
 
 ```{r}
 # Global plotting parameters
-myalpha <- 0.05
+myalpha <- 0.005  # works for 10k simulations; increase if using less simulations.
 jitter_colour <- "dodgerblue3"
 theme_set(theme_bw())
 ```
@@ -520,8 +520,8 @@ Note that running 1000 simulations could take several days on a normal computer.
 Running 10 000 as we did is only recommended on a computer cluster.
 
 ```{r, message=FALSE}
-# sim_till_aim(aim = 1)  # Outputs FALSE if there isn't any file on disk yet
-# run_till_aim(aim = 1)
+# sim_till_aim(aim = 1000)  # Outputs FALSE if there isn't any file on disk yet
+# run_till_aim(aim = 1000)
 ```
 
 
@@ -531,16 +531,23 @@ Basic descriptors of simulations and processing
 Load simulations from disk and split into two data frames
 --------------------------
 
-Once the simulations have run, we load results from disk:
+Once the simulations have run, we load results from disk.
+
+Note that we generate the report based on the full set of at least 10,000
+simulations per sample size and simulation type. However, the corresponding
+data file is too large to share. If you want to run the script, you should
+either generate your own simulations (see previous section) or use the lite
+version shared in this git repo. You will have to comment/uncomment
+appropriately from the following snippet.
 
 ```{r, message = FALSE}
-# This is the file that keeps stacking the result of simulations:
+# # This is the file that keeps stacking the result of simulations:
 # mysims <- read_csv("data/power_simulation_results_append.csv")
-# But we can also load previously run results:
-# 1) Lite version with 5% of the final simulations (randomly chosen)
-mysims <- read_csv("data/power_simulation_results_append_lite.csv")
-# 2) The full set of simulations: this is quite big and takes time to even load:
-# mysims <- read_csv("data/power_simulation_results_append_final_10k.csv")
+# # But we can also load a lite version of previously run simulations, with 5% of
+# # the final simulations (randomly chosen):
+# mysims <- read_csv("data/power_simulation_results_append_lite.csv")
+# We ran the script with the full set of simulations (not included in repo):
+mysims <- read_csv("data/power_simulation_results_append_final_10k.csv")
 # Rearrange columns for convenience:
 mysims <- mysims %>%
   select(sim_id : Nsubj, t_ellapsed, term : conv_null)
@@ -816,10 +823,6 @@ sims_coef %>%
   facet_grid(. ~ sim_type) +
   geom_hline(yintercept = sqrt(diag(ranef_sigma_subj)[1]), linetype = "dashed")
 ```
-
-
-
-
 
 
 Conclusion

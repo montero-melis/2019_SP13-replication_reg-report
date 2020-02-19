@@ -135,7 +135,9 @@ d$n <- 48
 Model of original data 
 ======================
 
-The model takes some time to fit with `brms`, so retrieve it from disk:
+The model takes some time to fit with `brms`, so retrieve it from disk
+(to retrieve it from disk you may need to run the model first; this is done
+in Appendix B):
 
 ```{r}
 # Load from disk - list containing 1) full model, 2) null model, 3) BF
@@ -222,7 +224,7 @@ sim_ex <- simulate_binom(
   ranef_sigma_subj = ranef_sigma_subj,
   ranef_sigma_item = ranef_sigma_item
   )
-sim_ex
+kable(head(sim_ex))
 ```
 
 
@@ -300,11 +302,8 @@ analyze_simulation <- function(df, print_model_summaries = FALSE) {
 Let's illustrate with an example (using the data set simulated above).
 
 ```{r, message=FALSE, warning=FALSE}
-set.seed(753)
-tictoc::tic()
 # print_model_summaries=TRUE would print the actual model summaries to screen
 an_ex <- analyze_simulation(sim_ex, print_model_summaries = FALSE)
-tictoc::toc()
 ```
 
 The output is a data frame with information about the analysis of the simulated
@@ -342,10 +341,10 @@ sim_many <- function(rseed, sim_id, Nsubj, sim_type, incl_col_names, ...) {
   istype1 <- if (sim_type == "type2") {
     FALSE
     } else if (sim_type == "type1") {
-    TRUE
-    } else{
+      TRUE
+      } else{
         stop("sim_type has to be either 'type1' or 'type2'")
-    }
+      }
   set.seed(rseed)
   df <- simulate_binom(Nsubj, type1 = istype1, ...)
   result <- analyze_simulation(df)
@@ -367,7 +366,7 @@ sim_many <- function(rseed, sim_id, Nsubj, sim_type, incl_col_names, ...) {
 
 A function that computes how many simulations we still need to run, based on
 the file on disk that stores simulation results. It outputs FALSE if it doesn't
-find the file. This function is called from the `run_till_aim()` function (below)
+find the file. This function is called by the `run_till_aim()` function (below)
 which actually runs the simulations.
 
 ```{r}
@@ -438,7 +437,7 @@ run_till_aim <- function(
 
   # 1st case: no simulations have been run, in which case sims is FALSE
   if (is.logical(sims)) {
-    # so then run we'll run one of each sample size to get started
+    # so then run one of each sample size to get started
     print("Create file and run one type1 and type2 sim for each sample size")
     params <- tibble(
       Nsubj = rep(sample_sizes, each = 2),
@@ -559,7 +558,8 @@ The data frame loaded above contains a lot of information about the model
 fitting (it consists of `r nrow(mysims)` rows).
 Mainly it consists of two sets of output:
 
-1) The BIC of the models and the corresponding Bayes factor (BF_BIC):
+1) The BIC of the models and the corresponding Bayes factor (BF_BIC); this
+information is summarized on one row per simulated data set:
 
 ```{r}
 sims_BIC <- mysims %>%
@@ -571,7 +571,8 @@ sims_BIC <- mysims %>%
 sims_BIC %>% head(3) %>% kable(digits = 2)
 ```
 
-2) The fixed effect coefficient estimates of each model (in long format):
+2) The fixed effect coefficient estimates of each model; this information is in
+long format, i.e. spread over several rows for each model (see column `term`):
 
 ```{r}
 sims_coef <- mysims %>%
@@ -691,8 +692,7 @@ plot_sims <- function(type, df = sims_BIC) {
     xlab("Number of participants") +
     ylab("Proportion") +
     labs(fill = "Decision") +
-    ggtitle(mytitle) +
-    theme(legend.position = "bottom")
+    ggtitle(mytitle)
   p
 }
 ```
@@ -749,7 +749,7 @@ either reject the null or fail to reject it.
 Type 1 simulations show us the rate of false positives; Type 2 simulations show
 power:
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 freq_decis <- expand.grid(
   H0_decision = c("Reject", "Fail to reject"),
   sim_type = unique(sims_coef$sim_type)
